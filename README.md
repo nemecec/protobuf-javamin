@@ -102,6 +102,42 @@ protobuf {
 }
 ```
 
+### Recommended: declare the version once via a Gradle version catalog
+
+The runtime and codegen versions must match — they're sibling artifacts of the
+same release. The two literals above are easy to drift; pull the version into
+`gradle/libs.versions.toml` and reference it from both call sites:
+
+```toml
+# gradle/libs.versions.toml
+[versions]
+protobuf-javamin = "1.0.0"
+
+[libraries]
+protobuf-javamin-runtime = { module = "dev.nemecec.protobuf.javamin:protobuf-javamin-runtime", version.ref = "protobuf-javamin" }
+protobuf-javamin-codegen = { module = "dev.nemecec.protobuf.javamin:protobuf-javamin-codegen", version.ref = "protobuf-javamin" }
+```
+
+```kotlin
+// build.gradle.kts
+dependencies {
+  implementation(libs.protobuf.javamin.runtime)
+}
+
+protobuf {
+  plugins {
+    id("javamin") {
+      // protobuf-gradle-plugin's `artifact` takes a string, so we render the
+      // catalog entry to "group:name:version" and append the classifier+extension.
+      artifact = "${libs.protobuf.javamin.codegen.get()}:all@jar"
+    }
+  }
+  // ...generateProtoTasks { } block as above
+}
+```
+
+### Generated code
+
 The generated classes look like Google's `java_multiple_files = true` output,
 except they import from `dev.nemecec.protobuf.javamin` instead of
 `com.google.protobuf`. Existing call sites of the form
