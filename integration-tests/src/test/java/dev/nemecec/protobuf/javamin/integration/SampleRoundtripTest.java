@@ -173,6 +173,60 @@ class SampleRoundtripTest {
   }
 
   @Test
+  @DisplayName("equals/hashCode — same content compares equal across instances; differing content does not")
+  void equalsAndHashCode() {
+    Sample a = Sample.newBuilder()
+        .setName("required")
+        .setId(7)
+        .addTags("alpha")
+        .addItems(Sample.Inner.newBuilder().setValue(1).setLabel("a").build())
+        .build();
+    Sample b = Sample.newBuilder()
+        .setName("required")
+        .setId(7)
+        .addTags("alpha")
+        .addItems(Sample.Inner.newBuilder().setValue(1).setLabel("a").build())
+        .build();
+    Sample different = Sample.newBuilder()
+        .setName("required")
+        .setId(8)  // <- different
+        .build();
+
+    assertThat(a).isEqualTo(b);
+    assertThat(a.hashCode()).isEqualTo(b.hashCode());
+    assertThat(a).isNotEqualTo(different);
+
+    // hashCode is well-defined for a message with no optional fields set:
+    assertThat(Sample.newBuilder().setName("x").build())
+        .isEqualTo(Sample.newBuilder().setName("x").build());
+  }
+
+  @Test
+  @DisplayName("toString lists only set fields, with quoted strings and typed enums")
+  void toStringRenderingIncludesOnlySetFields() {
+    Sample s = Sample.newBuilder()
+        .setId(7)
+        .setName("hello")
+        .setFavoriteColor(Color.GREEN)
+        .addTags("alpha")
+        .addColorPalette(Color.RED)
+        .build();
+    String rendered = s.toString();
+
+    // Set fields appear, with strings quoted and enums typed:
+    assertThat(rendered).contains("id=7");
+    assertThat(rendered).contains("name=\"hello\"");
+    assertThat(rendered).contains("favoriteColor=GREEN");
+    assertThat(rendered).contains("tags=[alpha]");
+    assertThat(rendered).contains("colorPalette=[RED]");
+    // Unset fields are absent:
+    assertThat(rendered).doesNotContain("active");
+    assertThat(rendered).doesNotContain("payload");
+    // Wraps in ClassName{ ... }:
+    assertThat(rendered).startsWith("Sample{").endsWith("}");
+  }
+
+  @Test
   @DisplayName("getSerializedSize matches actual encoded length")
   void serializedSizeMatchesEncodedLength() throws Exception {
     Sample s = Sample.newBuilder()

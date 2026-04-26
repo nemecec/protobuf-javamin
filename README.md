@@ -98,9 +98,29 @@ Deliberate omissions, in order of likelihood we'd add support:
 
 - Proto3.
 - `oneof`, `map<K, V>`.
+- Packed repeated primitives (`[packed=true]` on the wire). Decoding falls
+  through to skip-unknown-field.
 - Extensions.
+- `[default=...]` field defaults. Unset fields read back as the type default
+  (0/""/empty).
 - Reflection / `Descriptors` (defeats the point of being lean).
 - Text format / JSON serialisation.
+
+Behavioural notes vs `protobuf-javalite`:
+
+- A duplicate singular message field on the wire is *replaced* (last-one-wins),
+  not merged. proto2 spec says merge; in practice well-formed peers don't emit
+  duplicates.
+- `isInitialized()` checks only this message's required fields, not those of
+  embedded message-typed fields. A top-level message is allowed through even
+  if a (nested, optional) embedded message is missing some of *its* required
+  fields.
+- Generated messages override `equals` / `hashCode` / `toString` per field —
+  two instances with the same fields compare equal regardless of set-order
+  (no per-call allocation), and `toString` lists only the fields that are
+  actually set (`Sample{id=1, name="x"}`).
+- Builders don't expose `toBuilder()` or `Builder.mergeFrom(Message)`. Build a
+  fresh builder if you need to copy.
 
 Adding any of these is straightforward in the codegen and runtime if a need
 arises.

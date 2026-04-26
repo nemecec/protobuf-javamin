@@ -112,4 +112,11 @@ public final class ByteString {
     }
     return h;
   }
+
+  @Override
+  public String toString() {
+    // Don't dump the raw bytes — they may be opaque, large, or sensitive.
+    // The size is enough to disambiguate at a glance during diagnostics.
+    return "ByteString[" + bytes.length + " bytes]";
+  }
 }

@@ -20,7 +20,13 @@ import com.google.protobuf.DescriptorProtos.EnumDescriptorProto;
 import com.google.protobuf.DescriptorProtos.EnumValueDescriptorProto;
 import com.google.protobuf.DescriptorProtos.FieldDescriptorProto;
 import com.google.protobuf.DescriptorProtos.FieldDescriptorProto.Label;
+import com.google.protobuf.DescriptorProtos.OneofDescriptorProto;
 import dev.nemecec.protobuf.javamin.codegen.JavaGen.FieldKind;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /**
  * Generates the Java source for one proto message (and recursively for nested
@@ -103,6 +109,13 @@ final class MessageWriter {
       writeMessageAccessors(sb, f, inner);
     }
 
+    // Per-oneof case accessor on the message.
+    Map<Integer, List<FieldDescriptorProto>> oneofs = oneofGroups(m);
+    for (Map.Entry<Integer, List<FieldDescriptorProto>> entry : oneofs.entrySet()) {
+      OneofDescriptorProto oneof = m.getOneofDecl(entry.getKey());
+      writeOneofCaseGetter(sb, oneof, entry.getValue(), inner);
+    }
+
     // isInitialized.
     sb.append(inner).append("@Override\n");
     sb.append(inner).append("public boolean isInitialized() {\n");
@@ -134,6 +147,45 @@ final class MessageWriter {
     sb.append(inner).append("  return size;\n");
     sb.append(inner).append("}\n\n");
 
+    // equals / hashCode — field-by-field, allocation-free. Matches what
+    // protobuf-javalite emits: only set (has-flag true) optional fields and
+    // non-empty repeated fields contribute to the hash, so an unset field
+    // and a field set to its type-default still compare equal across instances.
+    sb.append(inner).append("@Override\n");
+    sb.append(inner).append("public boolean equals(Object obj) {\n");
+    sb.append(inner).append("  if (this == obj) return true;\n");
+    sb.append(inner).append("  if (!(obj instanceof ").append(name).append(")) return false;\n");
+    sb.append(inner).append("  ").append(name).append(" other = (").append(name).append(") obj;\n");
+    for (FieldDescriptorProto f : m.getFieldList()) {
+      writeFieldEquals(sb, f, inner + "  ");
+    }
+    sb.append(inner).append("  return true;\n");
+    sb.append(inner).append("}\n\n");
+
+    sb.append(inner).append("@Override\n");
+    sb.append(inner).append("public int hashCode() {\n");
+    sb.append(inner).append("  int hash = 1;\n");
+    for (FieldDescriptorProto f : m.getFieldList()) {
+      writeFieldHash(sb, f, inner + "  ");
+    }
+    sb.append(inner).append("  return hash;\n");
+    sb.append(inner).append("}\n\n");
+
+    // toString — emit only the fields that are actually set, comma-separated,
+    // suitable for log lines and test failure output. Strings are quoted; enums
+    // are rendered as their typed name; embedded messages recurse via their own
+    // toString. Repeated fields delegate to List.toString (which calls toString
+    // on each element).
+    sb.append(inner).append("@Override\n");
+    sb.append(inner).append("public String toString() {\n");
+    sb.append(inner).append("  StringBuilder sb = new StringBuilder().append(\"").append(name).append("{\");\n");
+    sb.append(inner).append("  String sep = \"\";\n");
+    for (FieldDescriptorProto f : m.getFieldList()) {
+      writeFieldToString(sb, f, inner + "  ");
+    }
+    sb.append(inner).append("  return sb.append(\"}\").toString();\n");
+    sb.append(inner).append("}\n\n");
+
     // Static parse helpers + newBuilder.
     sb.append(inner).append("public static ").append(selfQualified)
         .append(" parseFrom(byte[] data) throws InvalidProtocolBufferException {\n");
@@ -162,6 +214,11 @@ final class MessageWriter {
     for (EnumDescriptorProto nestedEnum : m.getEnumTypeList()) {
       writeNestedEnum(sb, nestedEnum, inner);
     }
+    // One Case enum per oneof, alongside other nested types.
+    for (Map.Entry<Integer, List<FieldDescriptorProto>> entry : oneofs.entrySet()) {
+      OneofDescriptorProto oneof = m.getOneofDecl(entry.getKey());
+      writeOneofCaseEnum(sb, oneof, entry.getValue(), inner);
+    }
 
     sb.append(indent).append("}\n");
   }
@@ -180,8 +237,17 @@ final class MessageWriter {
     sb.append("\n");
 
     // Setters / hassers / clearers.
+    Map<Integer, List<FieldDescriptorProto>> oneofs = oneofGroups(m);
     for (FieldDescriptorProto f : m.getFieldList()) {
-      writeBuilderAccessors(sb, f, binner);
+      List<FieldDescriptorProto> siblings =
+          f.hasOneofIndex() ? oneofs.get(f.getOneofIndex()) : null;
+      writeBuilderAccessors(sb, f, binner, siblings);
+    }
+
+    // Per-oneof case accessor on the builder.
+    for (Map.Entry<Integer, List<FieldDescriptorProto>> entry : oneofs.entrySet()) {
+      OneofDescriptorProto oneof = m.getOneofDecl(entry.getKey());
+      writeOneofCaseGetter(sb, oneof, entry.getValue(), binner);
     }
 
     // build / buildPartial.
@@ -232,6 +298,86 @@ final class MessageWriter {
 
   // --- nested enum --------------------------------------------------------
 
+  // --- oneof support ------------------------------------------------------
+
+  /** Group a message's fields by their oneof index. Fields not in any oneof
+   *  are skipped. Synthetic proto3-optional oneofs would also be skipped, but
+   *  we don't support proto3 anyway. */
+  private static Map<Integer, List<FieldDescriptorProto>> oneofGroups(DescriptorProto m) {
+    Map<Integer, List<FieldDescriptorProto>> out = new LinkedHashMap<>();
+    for (FieldDescriptorProto f : m.getFieldList()) {
+      if (!f.hasOneofIndex()) continue;
+      out.computeIfAbsent(f.getOneofIndex(), k -> new ArrayList<>()).add(f);
+    }
+    return out;
+  }
+
+  /** {@code public XxxCase getXxxCase()} on the message and on the builder.
+   *  Reads has-flags in declaration order; first set wins. Setters of oneof
+   *  members on the builder clear sibling has-flags so at most one is set at
+   *  a time, but the read still tolerates inconsistent state. */
+  private void writeOneofCaseGetter(StringBuilder sb, OneofDescriptorProto oneof,
+                                    List<FieldDescriptorProto> members, String indent) {
+    String caseEnum = caseEnumName(oneof);
+    String getterName = "get" + capitalize(oneof.getName()) + "Case";
+    sb.append(indent).append("public ").append(caseEnum).append(" ").append(getterName).append("() {\n");
+    for (FieldDescriptorProto member : members) {
+      sb.append(indent).append("  if (").append(hasFlagName(member)).append(") return ").append(caseEnum)
+          .append(".").append(oneofConstName(member)).append(";\n");
+    }
+    sb.append(indent).append("  return ").append(caseEnum).append(".").append(notSetConstName(oneof)).append(";\n");
+    sb.append(indent).append("}\n");
+  }
+
+  /** {@code public enum XxxCase { FIELD1(N), FIELD2(M), XXX_NOT_SET(0); ... }}
+   *  Emitted as a nested type alongside other nested classes. Numeric values
+   *  match the proto field number per javalite convention. */
+  private void writeOneofCaseEnum(StringBuilder sb, OneofDescriptorProto oneof,
+                                  List<FieldDescriptorProto> members, String indent) {
+    String name = caseEnumName(oneof);
+    sb.append(indent).append("public enum ").append(name).append(" {\n");
+    for (FieldDescriptorProto member : members) {
+      sb.append(indent).append("  ").append(oneofConstName(member)).append("(").append(member.getNumber()).append("),\n");
+    }
+    sb.append(indent).append("  ").append(notSetConstName(oneof)).append("(0);\n");
+    sb.append(indent).append("  private final int value;\n");
+    sb.append(indent).append("  ").append(name).append("(int value) { this.value = value; }\n");
+    sb.append(indent).append("  public int getNumber() { return value; }\n");
+    sb.append(indent).append("  public static ").append(name).append(" forNumber(int value) {\n");
+    sb.append(indent).append("    switch (value) {\n");
+    for (FieldDescriptorProto member : members) {
+      sb.append(indent).append("      case ").append(member.getNumber()).append(": return ")
+          .append(oneofConstName(member)).append(";\n");
+    }
+    sb.append(indent).append("      case 0: return ").append(notSetConstName(oneof)).append(";\n");
+    sb.append(indent).append("      default: return null;\n");
+    sb.append(indent).append("    }\n");
+    sb.append(indent).append("  }\n");
+    sb.append(indent).append("}\n\n");
+  }
+
+  /** Snippet emitted at the start of a oneof-member setter: clear all sibling
+   *  has-flags so at most one variant is "present" at a time. */
+  private static void writeOneofSiblingClears(StringBuilder sb, FieldDescriptorProto self,
+                                              List<FieldDescriptorProto> siblings) {
+    for (FieldDescriptorProto sib : siblings) {
+      if (sib == self) continue;
+      sb.append(hasFlagName(sib)).append(" = false; ");
+    }
+  }
+
+  private static String caseEnumName(OneofDescriptorProto oneof) {
+    return capitalize(oneof.getName()) + "Case";
+  }
+
+  private static String oneofConstName(FieldDescriptorProto member) {
+    return member.getName().toUpperCase(Locale.ROOT);
+  }
+
+  private static String notSetConstName(OneofDescriptorProto oneof) {
+    return oneof.getName().toUpperCase(Locale.ROOT) + "_NOT_SET";
+  }
+
   private void writeNestedEnum(StringBuilder sb, EnumDescriptorProto e, String indent) {
     sb.append(indent).append("public enum ").append(e.getName()).append(" {\n");
     int last = e.getValueCount() - 1;
@@ -239,6 +385,10 @@ final class MessageWriter {
       EnumValueDescriptorProto v = e.getValue(i);
       sb.append(indent).append("  ").append(v.getName()).append("(").append(v.getNumber()).append(")");
       sb.append(i == last ? ";\n\n" : ",\n");
+    }
+    for (EnumValueDescriptorProto v : e.getValueList()) {
+      sb.append(indent).append("  public static final int ").append(v.getName())
+          .append("_VALUE = ").append(v.getNumber()).append(";\n");
     }
     sb.append(indent).append("  private final int value;\n");
     sb.append(indent).append("  ").append(e.getName()).append("(int value) { this.value = value; }\n");
@@ -371,7 +521,8 @@ final class MessageWriter {
     sb.append(indent).append("}\n");
   }
 
-  private void writeBuilderAccessors(StringBuilder sb, FieldDescriptorProto f, String indent) {
+  private void writeBuilderAccessors(StringBuilder sb, FieldDescriptorProto f, String indent,
+                                     List<FieldDescriptorProto> oneofSiblings) {
     String name = f.getName();
     String capName = capitalize(name);
     if (f.getLabel() == Label.LABEL_REPEATED) {
@@ -388,11 +539,13 @@ final class MessageWriter {
         sb.append(indent).append("public int get").append(capName).append("Value() { return ")
             .append(fieldName(f)).append("; }\n");
         sb.append(indent).append("public Builder set").append(capName).append("(").append(boxedJavaType(f))
-            .append(" value) { if (value == null) throw new NullPointerException(); ")
-            .append(fieldName(f)).append(" = value.getNumber(); ").append(hasFlagName(f))
+            .append(" value) { if (value == null) throw new NullPointerException(); ");
+        if (oneofSiblings != null) writeOneofSiblingClears(sb, f, oneofSiblings);
+        sb.append(fieldName(f)).append(" = value.getNumber(); ").append(hasFlagName(f))
             .append(" = true; return this; }\n");
-        sb.append(indent).append("public Builder set").append(capName).append("Value(int value) { ")
-            .append(fieldName(f)).append(" = value; ").append(hasFlagName(f))
+        sb.append(indent).append("public Builder set").append(capName).append("Value(int value) { ");
+        if (oneofSiblings != null) writeOneofSiblingClears(sb, f, oneofSiblings);
+        sb.append(fieldName(f)).append(" = value; ").append(hasFlagName(f))
             .append(" = true; return this; }\n");
       } else {
         sb.append(indent).append("public ").append(primJavaType(f)).append(" get").append(capName)
@@ -402,7 +555,9 @@ final class MessageWriter {
         if (k == FieldKind.SCALAR_STRING || k == FieldKind.SCALAR_BYTES || k == FieldKind.MESSAGE) {
           sb.append(" if (value == null) throw new NullPointerException();");
         }
-        sb.append(" ").append(fieldName(f)).append(" = value; ").append(hasFlagName(f))
+        sb.append(" ");
+        if (oneofSiblings != null) writeOneofSiblingClears(sb, f, oneofSiblings);
+        sb.append(fieldName(f)).append(" = value; ").append(hasFlagName(f))
             .append(" = true; return this; }\n");
       }
       sb.append(indent).append("public Builder clear").append(capName).append("() { ").append(hasFlagName(f))
@@ -440,6 +595,111 @@ final class MessageWriter {
       sb.append(indent).append("if (").append(hasFlagName(f)).append(") size += CodedOutputStream.")
           .append(sizeMethod(f)).append("(").append(n).append(", ").append(name)
           .append(");\n");
+    }
+  }
+
+  private void writeFieldEquals(StringBuilder sb, FieldDescriptorProto f, String indent) {
+    String fld = fieldName(f);
+    String hf = hasFlagName(f);
+    if (f.getLabel() == Label.LABEL_REPEATED) {
+      // List equality compares element-by-element regardless of List subclass.
+      sb.append(indent).append("if (!").append(fld).append(".equals(other.").append(fld).append(")) return false;\n");
+    } else {
+      sb.append(indent).append("if (").append(hf).append(" != other.").append(hf).append(") return false;\n");
+      sb.append(indent).append("if (").append(hf).append(" && !(").append(equalityCompare(f, fld, "other." + fld))
+          .append(")) return false;\n");
+    }
+  }
+
+  private void writeFieldHash(StringBuilder sb, FieldDescriptorProto f, String indent) {
+    String fld = fieldName(f);
+    String hf = hasFlagName(f);
+    if (f.getLabel() == Label.LABEL_REPEATED) {
+      // Empty list contributes nothing — keeps hash consistent between an
+      // unset repeated and a cleared one.
+      sb.append(indent).append("if (!").append(fld).append(".isEmpty()) hash = hash * 37 + ").append(fld).append(".hashCode();\n");
+    } else {
+      sb.append(indent).append("if (").append(hf).append(") hash = hash * 37 + ").append(hashContribution(f, fld)).append(";\n");
+    }
+  }
+
+  /** Snippet that's true when two field values of this type are equal. Used inside
+   *  generated {@code equals(Object)}. Floating point uses bit-equality so NaN
+   *  compares as equal to itself, matching javalite. */
+  private String equalityCompare(FieldDescriptorProto f, String a, String b) {
+    switch (FieldKind.from(f.getType())) {
+      case SCALAR_INT32: case SCALAR_UINT32: case SCALAR_SINT32:
+      case SCALAR_FIXED32: case SCALAR_SFIXED32: case ENUM:
+      case SCALAR_INT64: case SCALAR_UINT64: case SCALAR_SINT64:
+      case SCALAR_FIXED64: case SCALAR_SFIXED64:
+      case SCALAR_BOOL:
+        return a + " == " + b;
+      case SCALAR_FLOAT:
+        return "Float.floatToIntBits(" + a + ") == Float.floatToIntBits(" + b + ")";
+      case SCALAR_DOUBLE:
+        return "Double.doubleToLongBits(" + a + ") == Double.doubleToLongBits(" + b + ")";
+      case SCALAR_STRING: case SCALAR_BYTES: case MESSAGE:
+        return a + ".equals(" + b + ")";
+      default: throw new IllegalStateException();
+    }
+  }
+
+  /** Hash contribution for one field. Caller decides whether to include it
+   *  (gated by has-flag for non-repeated, by non-emptiness for repeated). */
+  private String hashContribution(FieldDescriptorProto f, String name) {
+    switch (FieldKind.from(f.getType())) {
+      case SCALAR_INT32: case SCALAR_UINT32: case SCALAR_SINT32:
+      case SCALAR_FIXED32: case SCALAR_SFIXED32: case ENUM:
+        return name; // int's hashCode is the int itself
+      case SCALAR_INT64: case SCALAR_UINT64: case SCALAR_SINT64:
+      case SCALAR_FIXED64: case SCALAR_SFIXED64:
+        return "(int) (" + name + " ^ (" + name + " >>> 32))";
+      case SCALAR_FLOAT:
+        return "Float.floatToIntBits(" + name + ")";
+      case SCALAR_DOUBLE:
+        return "(int) (Double.doubleToLongBits(" + name + ") ^ (Double.doubleToLongBits(" + name + ") >>> 32))";
+      case SCALAR_BOOL:
+        return "(" + name + " ? 1231 : 1237)";
+      case SCALAR_STRING: case SCALAR_BYTES: case MESSAGE:
+        return name + ".hashCode()";
+      default: throw new IllegalStateException();
+    }
+  }
+
+  private void writeFieldToString(StringBuilder sb, FieldDescriptorProto f, String indent) {
+    String fld = fieldName(f);
+    String hf = hasFlagName(f);
+    String wireName = f.getName(); // proto-side name (camelCase as declared)
+    String capName = capitalize(wireName);
+    FieldKind kind = FieldKind.from(f.getType());
+
+    if (f.getLabel() == Label.LABEL_REPEATED) {
+      sb.append(indent).append("if (!").append(fld).append(".isEmpty()) {\n");
+      sb.append(indent).append("  sb.append(sep).append(\"").append(wireName).append("=\").append(");
+      if (kind == FieldKind.ENUM) {
+        // Render typed enum names (the storage is List<Integer>; getXxxList()
+        // returns List<EnumType>).
+        sb.append("get").append(capName).append("List()");
+      } else {
+        sb.append(fld);
+      }
+      sb.append(");\n");
+      sb.append(indent).append("  sep = \", \";\n");
+      sb.append(indent).append("}\n");
+    } else {
+      sb.append(indent).append("if (").append(hf).append(") {\n");
+      sb.append(indent).append("  sb.append(sep).append(\"").append(wireName).append("=\")");
+      if (kind == FieldKind.SCALAR_STRING) {
+        sb.append(".append('\"').append(").append(fld).append(").append('\"')");
+      } else if (kind == FieldKind.ENUM) {
+        // Render typed enum (or null for unknown numeric values).
+        sb.append(".append(get").append(capName).append("())");
+      } else {
+        sb.append(".append(").append(fld).append(")");
+      }
+      sb.append(";\n");
+      sb.append(indent).append("  sep = \", \";\n");
+      sb.append(indent).append("}\n");
     }
   }
 

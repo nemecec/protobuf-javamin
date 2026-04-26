@@ -46,6 +46,16 @@ final class EnumWriter {
       sb.append(i == last ? ";\n\n" : ",\n");
     }
 
+    // Mirror javalite: emit a per-entry static int constant alongside the enum
+    // entries. Generated and hand-written wrapper code that wants the wire value
+    // without going through `.getNumber()` references these (e.g., when used as
+    // an annotation argument or inline initialiser).
+    for (EnumValueDescriptorProto v : e.getValueList()) {
+      sb.append("  public static final int ").append(v.getName()).append("_VALUE = ")
+          .append(v.getNumber()).append(";\n");
+    }
+    sb.append("\n");
+
     sb.append("  private final int value;\n\n");
     sb.append("  ").append(e.getName()).append("(int value) { this.value = value; }\n\n");
 
