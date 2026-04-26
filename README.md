@@ -149,7 +149,8 @@ updated.
 Deliberate omissions, in order of likelihood we'd add support:
 
 - Proto3.
-- `map<K, V>`.
+- `map<K, enum>` — the rest of `map<K, V>` is supported; enum-valued maps need
+  an Integer-storage / typed-enum-API split that the v1 codegen doesn't emit.
 - Extensions.
 - Reflection / `Descriptors` (defeats the point of being lean).
 - Text format / JSON serialisation.
@@ -169,6 +170,12 @@ Behavioural notes vs `protobuf-javalite`:
   actually set (`Sample{id=1, name="x"}`).
 - Builders don't expose `toBuilder()` or `Builder.mergeFrom(Message)`. Build a
   fresh builder if you need to copy.
+- `map<K, V>` storage uses `LinkedHashMap` (insertion-order iteration) so a
+  given put-sequence produces a deterministic byte sequence, but the proto
+  spec doesn't fix map iteration order on the wire — peers can emit entries
+  in different orders for the same logical content. `Map.equals`/`hashCode`
+  is by-content and order-independent, which is what generated `equals` /
+  `hashCode` / cross-encoder tests rely on.
 
 Adding any of these is straightforward in the codegen and runtime if a need
 arises.

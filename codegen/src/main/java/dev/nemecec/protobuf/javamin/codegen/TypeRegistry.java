@@ -32,6 +32,11 @@ import java.util.Map;
 final class TypeRegistry {
 
   private final Map<String, String> javaName = new HashMap<>();
+  // Reverse-lookup from proto type name → message descriptor. Needed so the
+  // codegen can recognise synthetic {@code map_entry = true} messages (which
+  // protoc generates for every map<K, V> field) and steer them onto the map
+  // emission path instead of treating them as plain user-defined messages.
+  private final Map<String, DescriptorProto> messages = new HashMap<>();
 
   static TypeRegistry build(Iterable<FileDescriptorProto> files) {
     TypeRegistry r = new TypeRegistry();
@@ -53,6 +58,7 @@ final class TypeRegistry {
     String protoName = prefix(protoPkg, m.getName());
     String javaName = javaPkg + "." + (javaOuter.isEmpty() ? m.getName() : javaOuter + "." + m.getName());
     this.javaName.put(protoName, javaName);
+    this.messages.put(protoName, m);
 
     String childOuter = javaOuter.isEmpty() ? m.getName() : javaOuter + "." + m.getName();
     String childProto = protoName.substring(1); // strip leading dot for further prefixing
@@ -72,6 +78,14 @@ final class TypeRegistry {
       throw new IllegalStateException("Unknown proto type: " + protoTypeName);
     }
     return name;
+  }
+
+  /** Message descriptor for a fully-qualified proto type name, or {@code null}
+   *  if the name refers to an enum (or anything else not registered as a
+   *  message). Used to detect synthetic map_entry messages from a field's
+   *  type-name reference. */
+  DescriptorProto message(String protoTypeName) {
+    return messages.get(protoTypeName);
   }
 
   /** Proto package + simple name → fully-qualified proto name with leading dot. */

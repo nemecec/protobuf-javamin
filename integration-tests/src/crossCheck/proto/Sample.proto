@@ -32,6 +32,11 @@ message Sample {
   repeated fixed32 packedFixed32s = 13 [packed=true];
   repeated double packedDoubles = 14 [packed=true];
 
+  map<string, int32> stringToInt = 15;
+  map<int32, string> intToString = 16;
+  map<string, Inner> stringToInner = 17;
+  map<int64, bytes> longToBytes = 18;
+
   message Inner {
     optional int32 value = 1;
     optional string label = 2;

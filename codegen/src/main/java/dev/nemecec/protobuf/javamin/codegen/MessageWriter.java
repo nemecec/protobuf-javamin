@@ -58,7 +58,9 @@ final class MessageWriter {
     sb.append("import java.io.InputStream;\n");
     sb.append("import java.util.ArrayList;\n");
     sb.append("import java.util.Collections;\n");
+    sb.append("import java.util.LinkedHashMap;\n");
     sb.append("import java.util.List;\n");
+    sb.append("import java.util.Map;\n");
     sb.append("import dev.nemecec.protobuf.javamin.AbstractMessageLite;\n");
     sb.append("import dev.nemecec.protobuf.javamin.ByteString;\n");
     sb.append("import dev.nemecec.protobuf.javamin.CodedInputStream;\n");
@@ -207,8 +209,12 @@ final class MessageWriter {
     // Builder.
     writeBuilder(sb, m, selfQualified, inner);
 
-    // Nested types.
+    // Nested types — but skip the synthetic Entry messages protoc generates
+    // for every map<K, V> field. Emitting them as user-visible classes would
+    // both clutter the API and contradict javalite's "map_entry stays internal"
+    // shape that callers rely on.
     for (DescriptorProto nested : m.getNestedTypeList()) {
+      if (nested.getOptions().getMapEntry()) continue;
       writeMessage(sb, nested, selfQualified);
     }
     for (EnumDescriptorProto nestedEnum : m.getEnumTypeList()) {
@@ -262,7 +268,16 @@ final class MessageWriter {
     sb.append(binner).append("public ").append(selfQualified).append(" buildPartial() {\n");
     sb.append(binner).append("  ").append(selfQualified).append(" m = new ").append(selfQualified).append("();\n");
     for (FieldDescriptorProto f : m.getFieldList()) {
-      if (f.getLabel() == Label.LABEL_REPEATED) {
+      if (isMap(f)) {
+        // Freeze the map symmetrically with how repeated lists are frozen:
+        // empty stays as Internal.emptyMap() (singleton, no allocation), non-
+        // empty becomes Collections.unmodifiableMap so accidental post-build
+        // mutation is caught immediately.
+        sb.append(binner).append("  m.").append(fieldName(f)).append(" = ").append(fieldName(f))
+            .append(".isEmpty() ? Internal.<").append(mapKeyJavaType(f)).append(", ")
+            .append(mapValueJavaType(f)).append(">emptyMap() : Collections.unmodifiableMap(")
+            .append(fieldName(f)).append(");\n");
+      } else if (f.getLabel() == Label.LABEL_REPEATED) {
         // Freeze the list: assign as Collections.unmodifiableList wrapping the current ArrayList,
         // or empty list if untouched. The unmodifiability guards against accidental post-build mutation.
         sb.append(binner).append("  m.").append(fieldName(f)).append(" = ").append(fieldName(f))
@@ -407,7 +422,11 @@ final class MessageWriter {
   // --- field-level emission ----------------------------------------------
 
   private void writeFieldDeclarations(StringBuilder sb, FieldDescriptorProto f, String indent) {
-    if (f.getLabel() == Label.LABEL_REPEATED) {
+    if (isMap(f)) {
+      sb.append(indent).append("private Map<").append(mapKeyJavaType(f)).append(", ")
+          .append(mapValueJavaType(f)).append("> ")
+          .append(fieldName(f)).append(" = Internal.emptyMap();\n");
+    } else if (f.getLabel() == Label.LABEL_REPEATED) {
       sb.append(indent).append("private List<").append(repeatedStorageType(f)).append("> ")
           .append(fieldName(f)).append(" = Internal.emptyList();\n");
     } else {
@@ -420,7 +439,9 @@ final class MessageWriter {
   private void writeMessageAccessors(StringBuilder sb, FieldDescriptorProto f, String indent) {
     String name = f.getName();
     String capName = capitalize(name);
-    if (f.getLabel() == Label.LABEL_REPEATED) {
+    if (isMap(f)) {
+      writeMapReadOnlyAccessors(sb, f, indent, capName);
+    } else if (f.getLabel() == Label.LABEL_REPEATED) {
       writeRepeatedReadOnlyAccessors(sb, f, indent, capName);
     } else {
       sb.append(indent).append("public boolean has").append(capName).append("() { return ")
@@ -525,7 +546,10 @@ final class MessageWriter {
                                      List<FieldDescriptorProto> oneofSiblings) {
     String name = f.getName();
     String capName = capitalize(name);
-    if (f.getLabel() == Label.LABEL_REPEATED) {
+    if (isMap(f)) {
+      writeMapReadOnlyAccessors(sb, f, indent, capName);
+      writeMapMutators(sb, f, indent, capName);
+    } else if (f.getLabel() == Label.LABEL_REPEATED) {
       writeRepeatedReadOnlyAccessors(sb, f, indent, capName);
       writeRepeatedMutators(sb, f, indent, capName);
     } else {
@@ -571,6 +595,10 @@ final class MessageWriter {
   private void writeFieldWrite(StringBuilder sb, FieldDescriptorProto f, String indent) {
     int n = f.getNumber();
     String name = fieldName(f);
+    if (isMap(f)) {
+      writeMapFieldWrite(sb, f, indent);
+      return;
+    }
     if (f.getLabel() == Label.LABEL_REPEATED) {
       if (isPackedOnWire(f)) {
         // Packed: tag(LD) + varint(payloadSize) + concat-of-NoTag-payloads.
@@ -606,6 +634,10 @@ final class MessageWriter {
   private void writeFieldSize(StringBuilder sb, FieldDescriptorProto f, String indent) {
     int n = f.getNumber();
     String name = fieldName(f);
+    if (isMap(f)) {
+      writeMapFieldSize(sb, f, indent);
+      return;
+    }
     if (f.getLabel() == Label.LABEL_REPEATED) {
       if (isPackedOnWire(f)) {
         sb.append(indent).append("if (!").append(name).append(".isEmpty()) {\n");
@@ -633,8 +665,10 @@ final class MessageWriter {
   private void writeFieldEquals(StringBuilder sb, FieldDescriptorProto f, String indent) {
     String fld = fieldName(f);
     String hf = hasFlagName(f);
-    if (f.getLabel() == Label.LABEL_REPEATED) {
-      // List equality compares element-by-element regardless of List subclass.
+    if (isMap(f) || f.getLabel() == Label.LABEL_REPEATED) {
+      // Both Map.equals and List.equals compare by-content; for maps the
+      // comparison is order-independent, which is what we want (proto spec
+      // does not constrain map iteration order).
       sb.append(indent).append("if (!").append(fld).append(".equals(other.").append(fld).append(")) return false;\n");
     } else {
       sb.append(indent).append("if (").append(hf).append(" != other.").append(hf).append(") return false;\n");
@@ -646,9 +680,10 @@ final class MessageWriter {
   private void writeFieldHash(StringBuilder sb, FieldDescriptorProto f, String indent) {
     String fld = fieldName(f);
     String hf = hasFlagName(f);
-    if (f.getLabel() == Label.LABEL_REPEATED) {
-      // Empty list contributes nothing — keeps hash consistent between an
-      // unset repeated and a cleared one.
+    if (isMap(f) || f.getLabel() == Label.LABEL_REPEATED) {
+      // Empty list/map contributes nothing — keeps hash consistent between an
+      // unset and a cleared field. Map.hashCode is order-independent so two
+      // logically-equal maps always hash equal regardless of insertion order.
       sb.append(indent).append("if (!").append(fld).append(".isEmpty()) hash = hash * 37 + ").append(fld).append(".hashCode();\n");
     } else {
       sb.append(indent).append("if (").append(hf).append(") hash = hash * 37 + ").append(hashContribution(f, fld)).append(";\n");
@@ -705,7 +740,15 @@ final class MessageWriter {
     String capName = capitalize(wireName);
     FieldKind kind = FieldKind.from(f.getType());
 
-    if (f.getLabel() == Label.LABEL_REPEATED) {
+    if (isMap(f)) {
+      // Map.toString produces "{k1=v1, k2=v2}" which is good enough for log
+      // lines. Empty map suppressed, matching the existing repeated-field rule.
+      sb.append(indent).append("if (!").append(fld).append(".isEmpty()) {\n");
+      sb.append(indent).append("  sb.append(sep).append(\"").append(wireName).append("=\").append(")
+          .append(fld).append(");\n");
+      sb.append(indent).append("  sep = \", \";\n");
+      sb.append(indent).append("}\n");
+    } else if (f.getLabel() == Label.LABEL_REPEATED) {
       sb.append(indent).append("if (!").append(fld).append(".isEmpty()) {\n");
       sb.append(indent).append("  sb.append(sep).append(\"").append(wireName).append("=\").append(");
       if (kind == FieldKind.ENUM) {
@@ -736,6 +779,10 @@ final class MessageWriter {
   }
 
   private void writeFieldRead(StringBuilder sb, FieldDescriptorProto f, String indent) {
+    if (isMap(f)) {
+      writeMapFieldRead(sb, f, indent);
+      return;
+    }
     int wireType = wireType(f);
     int tag = (f.getNumber() << 3) | wireType;
     String name = fieldName(f);
@@ -1138,6 +1185,266 @@ final class MessageWriter {
       case ENUM: return "readEnum";
       default: throw new IllegalStateException("read for " + f.getType() + " uses readMessage path");
     }
+  }
+
+  // --- map fields ---------------------------------------------------------
+  //
+  // A {@code map<K, V>} on the proto side is sugar for a repeated synthetic
+  // message: protoc generates a nested {@code XxxEntry} message with fields
+  // {@code key=1} / {@code value=2} and the {@code map_entry = true} option,
+  // then rewrites the user's field as {@code repeated XxxEntry}. Detection
+  // therefore means "repeated field whose element message type is marked
+  // map_entry"; the nested Entry message itself is suppressed in
+  // writeMessage's nested-types loop so it doesn't surface as a public class.
+
+  /** True if {@code f} is a map field. Synthetic Entry detection happens via
+   *  the entry message's options, not via field name conventions. */
+  private boolean isMap(FieldDescriptorProto f) {
+    if (f.getLabel() != Label.LABEL_REPEATED) return false;
+    if (FieldKind.from(f.getType()) != FieldKind.MESSAGE) return false;
+    DescriptorProto entry = registry.message(f.getTypeName());
+    return entry != null && entry.getOptions().getMapEntry();
+  }
+
+  private DescriptorProto mapEntry(FieldDescriptorProto f) {
+    return registry.message(f.getTypeName());
+  }
+
+  private FieldDescriptorProto mapKey(FieldDescriptorProto f) {
+    return mapEntry(f).getField(0);
+  }
+
+  private FieldDescriptorProto mapValue(FieldDescriptorProto f) {
+    return mapEntry(f).getField(1);
+  }
+
+  /** Java type used in the {@code Map<K, ?>} declaration. Always a boxed
+   *  reference type — primitives can't be Map keys in Java. */
+  private String mapKeyJavaType(FieldDescriptorProto f) {
+    return boxedJavaType(mapKey(f));
+  }
+
+  /** Java type used in the {@code Map<?, V>} declaration. For message values,
+   *  the FQN of the message type; for scalars, the boxed primitive. We don't
+   *  yet support enum-valued maps — javalite stores those as {@code Integer}
+   *  but exposes the typed enum API on top, which is more codegen than v1
+   *  warrants. The check here is defensive — protoc validates field types. */
+  private String mapValueJavaType(FieldDescriptorProto f) {
+    FieldDescriptorProto v = mapValue(f);
+    if (FieldKind.from(v.getType()) == FieldKind.ENUM) {
+      throw new IllegalStateException(
+          "map<K, enum> is not yet supported by protobuf-javamin (field "
+              + f.getName() + "). Use an int-typed value type for now.");
+    }
+    return boxedJavaType(v);
+  }
+
+  /** Read-only accessors shared by message and builder for a map field —
+   *  mirrors the javalite-style API: getXxxMap, getXxxCount, containsXxx,
+   *  getXxxOrDefault, getXxxOrThrow. */
+  private void writeMapReadOnlyAccessors(StringBuilder sb, FieldDescriptorProto f, String indent, String capName) {
+    String fld = fieldName(f);
+    String k = mapKeyJavaType(f);
+    String v = mapValueJavaType(f);
+
+    // The unmodifiable wrapper makes accidental mutation (e.g. iterating and
+    // calling Iterator.remove() on a getXxxMap() reference) fail loudly rather
+    // than silently mutating the message. Same property as repeated getXxxList().
+    sb.append(indent).append("public Map<").append(k).append(", ").append(v).append("> get")
+        .append(capName).append("Map() { return Collections.unmodifiableMap(").append(fld).append("); }\n");
+    sb.append(indent).append("public int get").append(capName).append("Count() { return ")
+        .append(fld).append(".size(); }\n");
+    sb.append(indent).append("public boolean contains").append(capName).append("(").append(k)
+        .append(" key) { if (key == null) throw new NullPointerException(); return ")
+        .append(fld).append(".containsKey(key); }\n");
+    sb.append(indent).append("public ").append(v).append(" get").append(capName)
+        .append("OrDefault(").append(k).append(" key, ").append(v).append(" defaultValue) {\n");
+    sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+    sb.append(indent).append("  return ").append(fld).append(".getOrDefault(key, defaultValue);\n");
+    sb.append(indent).append("}\n");
+    sb.append(indent).append("public ").append(v).append(" get").append(capName)
+        .append("OrThrow(").append(k).append(" key) {\n");
+    sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+    sb.append(indent).append("  ").append(v).append(" v = ").append(fld).append(".get(key);\n");
+    sb.append(indent).append("  if (v == null && !").append(fld).append(".containsKey(key))\n");
+    sb.append(indent).append("    throw new IllegalArgumentException(\"key not in map: \" + key);\n");
+    sb.append(indent).append("  return v;\n");
+    sb.append(indent).append("}\n");
+  }
+
+  /** Builder-only mutators for a map field — putXxx, putAllXxx, removeXxx,
+   *  clearXxx, plus the lazy ensureMutable that lifts the empty-singleton
+   *  storage to a real LinkedHashMap on the first put. */
+  private void writeMapMutators(StringBuilder sb, FieldDescriptorProto f, String indent, String capName) {
+    String fld = fieldName(f);
+    String k = mapKeyJavaType(f);
+    String v = mapValueJavaType(f);
+
+    sb.append(indent).append("public Builder put").append(capName).append("(").append(k)
+        .append(" key, ").append(v).append(" value) {\n");
+    sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+    sb.append(indent).append("  if (value == null) throw new NullPointerException();\n");
+    sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+    sb.append(indent).append("  ").append(fld).append(".put(key, value);\n");
+    sb.append(indent).append("  return this;\n");
+    sb.append(indent).append("}\n");
+
+    sb.append(indent).append("public Builder putAll").append(capName).append("(Map<? extends ")
+        .append(k).append(", ? extends ").append(v).append("> values) {\n");
+    sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+    sb.append(indent).append("  for (Map.Entry<? extends ").append(k).append(", ? extends ").append(v)
+        .append("> e : values.entrySet()) {\n");
+    sb.append(indent).append("    if (e.getKey() == null) throw new NullPointerException();\n");
+    sb.append(indent).append("    if (e.getValue() == null) throw new NullPointerException();\n");
+    sb.append(indent).append("    ").append(fld).append(".put(e.getKey(), e.getValue());\n");
+    sb.append(indent).append("  }\n");
+    sb.append(indent).append("  return this;\n");
+    sb.append(indent).append("}\n");
+
+    sb.append(indent).append("public Builder remove").append(capName).append("(").append(k)
+        .append(" key) {\n");
+    sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+    sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+    sb.append(indent).append("  ").append(fld).append(".remove(key);\n");
+    sb.append(indent).append("  return this;\n");
+    sb.append(indent).append("}\n");
+
+    sb.append(indent).append("public Builder clear").append(capName).append("() { ").append(fld)
+        .append(" = Internal.emptyMap(); return this; }\n");
+
+    sb.append(indent).append("private void ensure").append(capName).append("Mutable() {\n");
+    // LinkedHashMap mirrors javalite's MapField iteration order (insertion-
+    // order), so emitted bytes are deterministic given a fixed put-sequence.
+    sb.append(indent).append("  if (!(").append(fld).append(" instanceof LinkedHashMap)) ")
+        .append(fld).append(" = new LinkedHashMap<").append(k).append(", ").append(v).append(">(")
+        .append(fld).append(");\n");
+    sb.append(indent).append("}\n");
+  }
+
+  /** Generated encode for one map field: each entry is a length-delimited
+   *  submessage with the key at field 1 and value at field 2. The entry size
+   *  is a sum of the two computed-with-tag sizes. */
+  private void writeMapFieldWrite(StringBuilder sb, FieldDescriptorProto f, String indent) {
+    int n = f.getNumber();
+    String fld = fieldName(f);
+    String k = mapKeyJavaType(f);
+    String v = mapValueJavaType(f);
+    FieldDescriptorProto kf = mapKey(f);
+    FieldDescriptorProto vf = mapValue(f);
+
+    sb.append(indent).append("for (Map.Entry<").append(k).append(", ").append(v).append("> e : ")
+        .append(fld).append(".entrySet()) {\n");
+    sb.append(indent).append("  int entrySize = ")
+        .append(mapEntryKeySizeExpr(kf, "e.getKey()"))
+        .append(" + ").append(mapEntryValueSizeExpr(vf, "e.getValue()")).append(";\n");
+    sb.append(indent).append("  output.writeTag(").append(n).append(", 2);\n");
+    sb.append(indent).append("  output.writeUInt32NoTag(entrySize);\n");
+    // Key always at field 1; value always at field 2 — that's the synthetic
+    // Entry's schema and not negotiable per proto spec.
+    if (FieldKind.from(kf.getType()) == FieldKind.MESSAGE) {
+      throw new IllegalStateException("map keys can't be messages (field " + f.getName() + ")");
+    }
+    sb.append(indent).append("  output.").append(writeMethod(kf)).append("(1, e.getKey());\n");
+    if (FieldKind.from(vf.getType()) == FieldKind.MESSAGE) {
+      sb.append(indent).append("  output.writeMessage(2, e.getValue());\n");
+    } else {
+      sb.append(indent).append("  output.").append(writeMethod(vf)).append("(2, e.getValue());\n");
+    }
+    sb.append(indent).append("}\n");
+  }
+
+  private void writeMapFieldSize(StringBuilder sb, FieldDescriptorProto f, String indent) {
+    int n = f.getNumber();
+    String fld = fieldName(f);
+    String k = mapKeyJavaType(f);
+    String v = mapValueJavaType(f);
+    FieldDescriptorProto kf = mapKey(f);
+    FieldDescriptorProto vf = mapValue(f);
+
+    sb.append(indent).append("for (Map.Entry<").append(k).append(", ").append(v).append("> e : ")
+        .append(fld).append(".entrySet()) {\n");
+    sb.append(indent).append("  int entrySize = ")
+        .append(mapEntryKeySizeExpr(kf, "e.getKey()"))
+        .append(" + ").append(mapEntryValueSizeExpr(vf, "e.getValue()")).append(";\n");
+    sb.append(indent).append("  size += CodedOutputStream.computeTagSize(").append(n)
+        .append(") + CodedOutputStream.computeRawVarint32Size(entrySize) + entrySize;\n");
+    sb.append(indent).append("}\n");
+  }
+
+  /** Decode for a map field: read length, push limit, loop reading tags until
+   *  the entry ends. Tag 1 is the key, tag 2 is the value; missing key/value
+   *  fall back to type defaults (matches stock protobuf-java semantics for
+   *  malformed entries). */
+  private void writeMapFieldRead(StringBuilder sb, FieldDescriptorProto f, String indent) {
+    int tag = (f.getNumber() << 3) | 2; // length-delimited
+    String fld = fieldName(f);
+    String capName = capitalize(f.getName());
+    String k = mapKeyJavaType(f);
+    String v = mapValueJavaType(f);
+    FieldDescriptorProto kf = mapKey(f);
+    FieldDescriptorProto vf = mapValue(f);
+    int keyTag = (1 << 3) | wireType(kf);
+    int valueWireType = FieldKind.from(vf.getType()) == FieldKind.MESSAGE ? 2 : wireType(vf);
+    int valueTag = (2 << 3) | valueWireType;
+
+    sb.append(indent).append("case ").append(tag).append(": {\n");
+    sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+    sb.append(indent).append("  int len = input.readRawVarint32();\n");
+    sb.append(indent).append("  int oldLimit = input.pushLimit(len);\n");
+    sb.append(indent).append("  ").append(k).append(" key = ").append(mapEntryKeyDefault(kf)).append(";\n");
+    sb.append(indent).append("  ").append(v).append(" value = ").append(mapEntryValueDefault(vf)).append(";\n");
+    sb.append(indent).append("  int et;\n");
+    sb.append(indent).append("  while ((et = input.readTag()) != 0) {\n");
+    sb.append(indent).append("    switch (et) {\n");
+    sb.append(indent).append("      case ").append(keyTag).append(": key = input.").append(readMethod(kf)).append("(); break;\n");
+    if (FieldKind.from(vf.getType()) == FieldKind.MESSAGE) {
+      String typeRef = registry.javaName(vf.getTypeName());
+      sb.append(indent).append("      case ").append(valueTag).append(": {\n");
+      sb.append(indent).append("        ").append(typeRef).append(".Builder b = ").append(typeRef)
+          .append(".newBuilder();\n");
+      sb.append(indent).append("        input.readMessage(b);\n");
+      sb.append(indent).append("        value = b.buildPartial();\n");
+      sb.append(indent).append("        break;\n");
+      sb.append(indent).append("      }\n");
+    } else {
+      sb.append(indent).append("      case ").append(valueTag).append(": value = input.")
+          .append(readMethod(vf)).append("(); break;\n");
+    }
+    sb.append(indent).append("      default: input.skipField(et); break;\n");
+    sb.append(indent).append("    }\n");
+    sb.append(indent).append("  }\n");
+    sb.append(indent).append("  input.popLimit(oldLimit);\n");
+    sb.append(indent).append("  ").append(fld).append(".put(key, value);\n");
+    sb.append(indent).append("  break;\n");
+    sb.append(indent).append("}\n");
+  }
+
+  /** Size expression for the key portion of one map entry, including the
+   *  field=1 tag. Must match what {@link #writeMapFieldWrite} actually emits. */
+  private String mapEntryKeySizeExpr(FieldDescriptorProto kf, String accessor) {
+    return "CodedOutputStream." + sizeMethod(kf) + "(1, " + accessor + ")";
+  }
+
+  private String mapEntryValueSizeExpr(FieldDescriptorProto vf, String accessor) {
+    if (FieldKind.from(vf.getType()) == FieldKind.MESSAGE) {
+      return "CodedOutputStream.computeMessageSize(2, " + accessor + ")";
+    }
+    return "CodedOutputStream." + sizeMethod(vf) + "(2, " + accessor + ")";
+  }
+
+  /** Default key value used while parsing one map entry — same as the type
+   *  default for a singular field of that type. We sidestep boxing concerns by
+   *  letting Java auto-box from {@link #defaultValue} which already returns
+   *  primitive-typed literals (0, "", false, etc.). */
+  private String mapEntryKeyDefault(FieldDescriptorProto kf) {
+    return defaultValue(kf);
+  }
+
+  private String mapEntryValueDefault(FieldDescriptorProto vf) {
+    if (FieldKind.from(vf.getType()) == FieldKind.MESSAGE) {
+      return registry.javaName(vf.getTypeName()) + ".getDefaultInstance()";
+    }
+    return defaultValue(vf);
   }
 
   // --- naming -------------------------------------------------------------
