@@ -15,6 +15,14 @@
  */
 plugins {
   java
+  // Loaded at the root scope (not applied here) so both :runtime and :codegen
+  // share the same plugin classes when they apply it. Without this, each
+  // subproject loads the plugin in its own classloader and the
+  // MavenCentralBuildService becomes a "different type" across siblings —
+  // Gradle 9 then refuses to share it (visible in IntelliJ as "Cannot set
+  // the value of task ':runtime:dropMavenCentralDeployment' property
+  // 'buildService' …").
+  alias(libs.plugins.maven.publish) apply false
 }
 
 allprojects {
