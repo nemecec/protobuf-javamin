@@ -895,17 +895,59 @@ final class MessageWriter {
   }
 
   // --- naming -------------------------------------------------------------
+  //
+  // Generated identifiers (member fields, getter/setter method names) follow
+  // the same UnderscoresToCamelCase rule that {@code protoc} uses for its Java
+  // codegen — see google/protobuf/descriptor.cc. The rule is non-obvious in two
+  // places: a digit forces the *next* letter to be capitalized (so the field
+  // name "fixed32s" becomes "fixed32S" / "Fixed32S"), and underscores are
+  // dropped while triggering a capitalization on the following letter
+  // ("foo_bar" → "fooBar" / "FooBar"). Aligning with protoc keeps the public
+  // method names byte-for-byte identical to what stock {@code protoc-java}
+  // would emit for the same .proto, which is the whole "drop-in for javalite"
+  // promise of this codegen.
 
   private static String fieldName(FieldDescriptorProto f) {
-    return f.getName() + "_";
+    return underscoresToCamelCase(f.getName(), false) + "_";
   }
 
   private static String hasFlagName(FieldDescriptorProto f) {
-    return "has_" + f.getName() + "_";
+    return "has" + underscoresToCamelCase(f.getName(), true) + "_";
   }
 
+  /** {@code capName} — used by callers building "get" / "set" / "add" + cap +
+   *  suffix. Forces the first letter capitalized; otherwise follows protoc's
+   *  rule. Empty input is returned unchanged (defensive — proto fields can't be
+   *  empty in practice). */
   private static String capitalize(String s) {
-    if (s.isEmpty()) return s;
-    return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    return underscoresToCamelCase(s, true);
+  }
+
+  /** Java port of protoc's UnderscoresToCamelCaseImpl from descriptor.cc.
+   *  Package-private so a focused unit test can pin the exact behaviour
+   *  without going through codegen-output inspection. */
+  static String underscoresToCamelCase(String input, boolean capNext) {
+    StringBuilder out = new StringBuilder(input.length());
+    for (int i = 0; i < input.length(); i++) {
+      char c = input.charAt(i);
+      if (c >= 'a' && c <= 'z') {
+        out.append(capNext ? (char) (c + ('A' - 'a')) : c);
+        capNext = false;
+      } else if (c >= 'A' && c <= 'Z') {
+        // First letter is forced lower-case unless caller requested capitalize;
+        // subsequent already-uppercase letters are kept as-is.
+        if (i == 0 && !capNext) out.append((char) (c + ('a' - 'A')));
+        else out.append(c);
+        capNext = false;
+      } else if (c >= '0' && c <= '9') {
+        out.append(c);
+        capNext = true;
+      } else {
+        // Underscore (or any non-alphanumeric) is dropped and signals the next
+        // letter should be capitalized.
+        capNext = true;
+      }
+    }
+    return out.toString();
   }
 }
