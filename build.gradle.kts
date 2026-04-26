@@ -27,7 +27,7 @@ plugins {
 
 allprojects {
   group = "dev.nemecec.protobuf.javamin"
-  version = "1.0.0-SNAPSHOT"
+  version = "1.0.0"
 
   repositories {
     mavenCentral()
