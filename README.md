@@ -122,8 +122,7 @@ protobuf {
   }
   generateProtoTasks {
     all().configureEach {
-      builtins.named("java") {}
-      builtins.remove(builtins.named("java").get())
+      builtins.removeIf { it.name == "java" }
       plugins { id("javamin") }
     }
   }

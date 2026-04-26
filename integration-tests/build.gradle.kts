@@ -83,8 +83,7 @@ protobuf {
   generateProtoTasks {
     // The :test sourceSet's protos go through our javamin codegen only.
     ofSourceSet("test").configureEach {
-      builtins.named("java") { /* configure-named registration */ }
-      builtins.remove(builtins.named("java").get())
+      builtins.removeIf { it.name == "java" }
       plugins {
         id("javamin")
       }
