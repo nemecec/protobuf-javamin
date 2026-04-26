@@ -75,7 +75,7 @@ plugins {
 }
 
 dependencies {
-  implementation("dev.nemecec.protobuf.javamin:protobuf-javamin-runtime:0.1.0")
+  implementation("dev.nemecec.protobuf.javamin:protobuf-javamin-runtime:1.0.0")
 }
 
 protobuf {
@@ -84,7 +84,7 @@ protobuf {
     id("javamin") {
       // Resolved from Maven Central as an executable uber-jar (`:all`
       // classifier, `@jar` extension); protoc runs it via `java -jar`.
-      artifact = "dev.nemecec.protobuf.javamin:protobuf-javamin-codegen:0.1.0:all@jar"
+      artifact = "dev.nemecec.protobuf.javamin:protobuf-javamin-codegen:1.0.0:all@jar"
     }
   }
   generateProtoTasks {
