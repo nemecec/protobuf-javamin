@@ -571,10 +571,30 @@ final class MessageWriter {
     int n = f.getNumber();
     String name = fieldName(f);
     if (f.getLabel() == Label.LABEL_REPEATED) {
-      sb.append(indent).append("for (int i = 0; i < ").append(name).append(".size(); i++) {\n");
-      sb.append(indent).append("  output.").append(writeMethod(f)).append("(").append(n)
-          .append(", ").append(name).append(".get(i));\n");
-      sb.append(indent).append("}\n");
+      if (isPackedOnWire(f)) {
+        // Packed: tag(LD) + varint(payloadSize) + concat-of-NoTag-payloads.
+        // We compute the payload size via a local loop because each entry's
+        // serialized size depends on its value (varints) and we need to know
+        // the total before we can write the length prefix.
+        sb.append(indent).append("if (!").append(name).append(".isEmpty()) {\n");
+        sb.append(indent).append("  int p = 0;\n");
+        sb.append(indent).append("  for (int i = 0; i < ").append(name).append(".size(); i++) {\n");
+        sb.append(indent).append("    p += CodedOutputStream.").append(sizeMethodNoTag(f))
+            .append("(").append(name).append(".get(i));\n");
+        sb.append(indent).append("  }\n");
+        sb.append(indent).append("  output.writeTag(").append(n).append(", 2);\n");
+        sb.append(indent).append("  output.writeUInt32NoTag(p);\n");
+        sb.append(indent).append("  for (int i = 0; i < ").append(name).append(".size(); i++) {\n");
+        sb.append(indent).append("    output.").append(writeMethodNoTag(f))
+            .append("(").append(name).append(".get(i));\n");
+        sb.append(indent).append("  }\n");
+        sb.append(indent).append("}\n");
+      } else {
+        sb.append(indent).append("for (int i = 0; i < ").append(name).append(".size(); i++) {\n");
+        sb.append(indent).append("  output.").append(writeMethod(f)).append("(").append(n)
+            .append(", ").append(name).append(".get(i));\n");
+        sb.append(indent).append("}\n");
+      }
     } else {
       sb.append(indent).append("if (").append(hasFlagName(f)).append(") output.")
           .append(writeMethod(f)).append("(").append(n).append(", ").append(name)
@@ -586,10 +606,22 @@ final class MessageWriter {
     int n = f.getNumber();
     String name = fieldName(f);
     if (f.getLabel() == Label.LABEL_REPEATED) {
-      sb.append(indent).append("for (int i = 0; i < ").append(name).append(".size(); i++) {\n");
-      sb.append(indent).append("  size += CodedOutputStream.").append(sizeMethod(f)).append("(").append(n)
-          .append(", ").append(name).append(".get(i));\n");
-      sb.append(indent).append("}\n");
+      if (isPackedOnWire(f)) {
+        sb.append(indent).append("if (!").append(name).append(".isEmpty()) {\n");
+        sb.append(indent).append("  int p = 0;\n");
+        sb.append(indent).append("  for (int i = 0; i < ").append(name).append(".size(); i++) {\n");
+        sb.append(indent).append("    p += CodedOutputStream.").append(sizeMethodNoTag(f))
+            .append("(").append(name).append(".get(i));\n");
+        sb.append(indent).append("  }\n");
+        sb.append(indent).append("  size += CodedOutputStream.computeTagSize(").append(n)
+            .append(") + CodedOutputStream.computeRawVarint32Size(p) + p;\n");
+        sb.append(indent).append("}\n");
+      } else {
+        sb.append(indent).append("for (int i = 0; i < ").append(name).append(".size(); i++) {\n");
+        sb.append(indent).append("  size += CodedOutputStream.").append(sizeMethod(f)).append("(").append(n)
+            .append(", ").append(name).append(".get(i));\n");
+        sb.append(indent).append("}\n");
+      }
     } else {
       sb.append(indent).append("if (").append(hasFlagName(f)).append(") size += CodedOutputStream.")
           .append(sizeMethod(f)).append("(").append(n).append(", ").append(name)
@@ -731,6 +763,24 @@ final class MessageWriter {
     }
     sb.append(indent).append("  break;\n");
     sb.append(indent).append("}\n");
+
+    // Packable repeated primitives accept either form on the wire regardless of
+    // schema-level [packed=true] — proto2 spec requires "be liberal in what you
+    // accept." The unpacked tag was emitted above; emit the packed
+    // (length-delimited) tag here as a sibling case.
+    if (isPackable(f)) {
+      int packedTag = (f.getNumber() << 3) | 2; // WIRETYPE_LENGTH_DELIMITED
+      sb.append(indent).append("case ").append(packedTag).append(": {\n");
+      sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+      sb.append(indent).append("  int length = input.readRawVarint32();\n");
+      sb.append(indent).append("  int oldLimit = input.pushLimit(length);\n");
+      sb.append(indent).append("  while (!input.isAtEnd()) {\n");
+      sb.append(indent).append("    ").append(name).append(".add(input.").append(readMethod(f)).append("());\n");
+      sb.append(indent).append("  }\n");
+      sb.append(indent).append("  input.popLimit(oldLimit);\n");
+      sb.append(indent).append("  break;\n");
+      sb.append(indent).append("}\n");
+    }
   }
 
   // --- type / method-name lookup tables ----------------------------------
@@ -870,6 +920,36 @@ final class MessageWriter {
       case MESSAGE: return "computeMessageSize";
       default: throw new IllegalStateException();
     }
+  }
+
+  private String writeMethodNoTag(FieldDescriptorProto f) {
+    return writeMethod(f) + "NoTag";
+  }
+
+  private String sizeMethodNoTag(FieldDescriptorProto f) {
+    // The stem matches sizeMethod() — "computeXxxSize" → "computeXxxSizeNoTag"
+    String s = sizeMethod(f);
+    return s + "NoTag";
+  }
+
+  /** True for repeated fields whose element type is a varint, fixed32, or
+   *  fixed64 wire type — i.e. anything packable per the proto2 spec. Strings,
+   *  bytes, and messages are length-delimited and therefore not packable. */
+  private static boolean isPackable(FieldDescriptorProto f) {
+    if (f.getLabel() != Label.LABEL_REPEATED) return false;
+    switch (FieldKind.from(f.getType())) {
+      case SCALAR_STRING: case SCALAR_BYTES: case MESSAGE:
+        return false;
+      default:
+        return true;
+    }
+  }
+
+  /** True if the schema requested {@code [packed=true]} for this field. Encoders
+   *  emit the packed wire form only when this is true; decoders accept either
+   *  form regardless (see writeFieldRead). proto2 default is unpacked. */
+  private static boolean isPackedOnWire(FieldDescriptorProto f) {
+    return isPackable(f) && f.getOptions().getPacked();
   }
 
   private String readMethod(FieldDescriptorProto f) {

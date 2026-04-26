@@ -76,6 +76,9 @@ class CrossEncoderRoundtripTest {
         .addTags("beta")
         .addColorPalette(Color.RED)
         .addColorPalette(Color.BLUE)
+        .addPackedInts(1).addPackedInts(-2).addPackedInts(400_000)
+        .addPackedFixed32S(0xDEADBEEF).addPackedFixed32S(0x01020304)
+        .addPackedDoubles(3.14).addPackedDoubles(2.71828)
         .build();
 
     byte[] wire = src.toByteArray();
@@ -106,6 +109,10 @@ class CrossEncoderRoundtripTest {
         dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Color.RED,
         dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Color.BLUE);
 
+    assertThat(dst.getPackedIntsList()).containsExactly(1, -2, 400_000);
+    assertThat(dst.getPackedFixed32SList()).containsExactly(0xDEADBEEF, 0x01020304);
+    assertThat(dst.getPackedDoublesList()).containsExactly(3.14, 2.71828);
+
     // Class metadata sanity check — guards against accidentally importing
     // both Sample types into one source file (which Java forbids), in which
     // case this test would silently start comparing javamin-vs-javamin.
@@ -134,6 +141,9 @@ class CrossEncoderRoundtripTest {
             .addTags("delta")
             .addColorPalette(dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Color.GREEN)
             .addColorPalette(dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Color.RED)
+            .addPackedInts(7).addPackedInts(8).addPackedInts(9)
+            .addPackedFixed32S(0xAABBCCDD)
+            .addPackedDoubles(0.5).addPackedDoubles(-0.5)
             .build();
 
     byte[] wire = src.toByteArray();
@@ -159,6 +169,10 @@ class CrossEncoderRoundtripTest {
 
     assertThat(dst.getTagsList()).containsExactly("gamma", "delta");
     assertThat(dst.getColorPaletteList()).containsExactly(Color.GREEN, Color.RED);
+
+    assertThat(dst.getPackedIntsList()).containsExactly(7, 8, 9);
+    assertThat(dst.getPackedFixed32SList()).containsExactly(0xAABBCCDD);
+    assertThat(dst.getPackedDoublesList()).containsExactly(0.5, -0.5);
   }
 
   @Test
@@ -176,6 +190,9 @@ class CrossEncoderRoundtripTest {
         .addTags("one")
         .addTags("two")
         .addItems(Sample.Inner.newBuilder().setValue(42).setLabel("nested").build())
+        .addPackedInts(1).addPackedInts(-2).addPackedInts(400_000)
+        .addPackedFixed32S(0xDEADBEEF)
+        .addPackedDoubles(3.14)
         .build();
     dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Sample google =
         dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Sample.newBuilder()
@@ -186,6 +203,9 @@ class CrossEncoderRoundtripTest {
             .addTags("two")
             .addItems(dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Sample.Inner.newBuilder()
                 .setValue(42).setLabel("nested").build())
+            .addPackedInts(1).addPackedInts(-2).addPackedInts(400_000)
+            .addPackedFixed32S(0xDEADBEEF)
+            .addPackedDoubles(3.14)
             .build();
 
     assertThat(javamin.toByteArray()).isEqualTo(google.toByteArray());

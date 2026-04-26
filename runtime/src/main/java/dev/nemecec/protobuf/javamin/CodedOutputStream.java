@@ -104,21 +104,37 @@ public final class CodedOutputStream {
 
   public void writeSInt32(int fieldNumber, int value) throws IOException {
     writeTag(fieldNumber, WireFormat.WIRETYPE_VARINT);
+    writeSInt32NoTag(value);
+  }
+
+  public void writeSInt32NoTag(int value) throws IOException {
     writeUInt32NoTag(encodeZigZag32(value));
   }
 
   public void writeSInt64(int fieldNumber, long value) throws IOException {
     writeTag(fieldNumber, WireFormat.WIRETYPE_VARINT);
+    writeSInt64NoTag(value);
+  }
+
+  public void writeSInt64NoTag(long value) throws IOException {
     writeUInt64NoTag(encodeZigZag64(value));
   }
 
   public void writeBool(int fieldNumber, boolean value) throws IOException {
     writeTag(fieldNumber, WireFormat.WIRETYPE_VARINT);
+    writeBoolNoTag(value);
+  }
+
+  public void writeBoolNoTag(boolean value) throws IOException {
     writeRawByte(value ? 1 : 0);
   }
 
   public void writeEnum(int fieldNumber, int value) throws IOException {
     writeTag(fieldNumber, WireFormat.WIRETYPE_VARINT);
+    writeEnumNoTag(value);
+  }
+
+  public void writeEnumNoTag(int value) throws IOException {
     writeInt32NoTag(value);
   }
 
@@ -129,11 +145,19 @@ public final class CodedOutputStream {
 
   public void writeSFixed32(int fieldNumber, int value) throws IOException {
     writeTag(fieldNumber, WireFormat.WIRETYPE_FIXED32);
+    writeSFixed32NoTag(value);
+  }
+
+  public void writeSFixed32NoTag(int value) throws IOException {
     writeFixed32NoTag(value);
   }
 
   public void writeFloat(int fieldNumber, float value) throws IOException {
     writeTag(fieldNumber, WireFormat.WIRETYPE_FIXED32);
+    writeFloatNoTag(value);
+  }
+
+  public void writeFloatNoTag(float value) throws IOException {
     writeFixed32NoTag(Float.floatToRawIntBits(value));
   }
 
@@ -144,11 +168,19 @@ public final class CodedOutputStream {
 
   public void writeSFixed64(int fieldNumber, long value) throws IOException {
     writeTag(fieldNumber, WireFormat.WIRETYPE_FIXED64);
+    writeSFixed64NoTag(value);
+  }
+
+  public void writeSFixed64NoTag(long value) throws IOException {
     writeFixed64NoTag(value);
   }
 
   public void writeDouble(int fieldNumber, double value) throws IOException {
     writeTag(fieldNumber, WireFormat.WIRETYPE_FIXED64);
+    writeDoubleNoTag(value);
+  }
+
+  public void writeDoubleNoTag(double value) throws IOException {
     writeFixed64NoTag(Double.doubleToRawLongBits(value));
   }
 
@@ -303,60 +335,112 @@ public final class CodedOutputStream {
     return value >= 0 ? computeRawVarint32Size(value) : 10;
   }
 
+  public static int computeInt64SizeNoTag(long value) {
+    return computeRawVarint64Size(value);
+  }
+
+  public static int computeUInt32SizeNoTag(int value) {
+    return computeRawVarint32Size(value);
+  }
+
+  public static int computeUInt64SizeNoTag(long value) {
+    return computeRawVarint64Size(value);
+  }
+
+  public static int computeSInt32SizeNoTag(int value) {
+    return computeRawVarint32Size(encodeZigZag32(value));
+  }
+
+  public static int computeSInt64SizeNoTag(long value) {
+    return computeRawVarint64Size(encodeZigZag64(value));
+  }
+
+  public static int computeBoolSizeNoTag(boolean value) {
+    return 1;
+  }
+
+  public static int computeEnumSizeNoTag(int value) {
+    return computeInt32SizeNoTag(value);
+  }
+
+  public static int computeFixed32SizeNoTag(int value) {
+    return 4;
+  }
+
+  public static int computeSFixed32SizeNoTag(int value) {
+    return 4;
+  }
+
+  public static int computeFloatSizeNoTag(float value) {
+    return 4;
+  }
+
+  public static int computeFixed64SizeNoTag(long value) {
+    return 8;
+  }
+
+  public static int computeSFixed64SizeNoTag(long value) {
+    return 8;
+  }
+
+  public static int computeDoubleSizeNoTag(double value) {
+    return 8;
+  }
+
   public static int computeInt32Size(int fieldNumber, int value) {
     return computeTagSize(fieldNumber) + computeInt32SizeNoTag(value);
   }
 
   public static int computeInt64Size(int fieldNumber, long value) {
-    return computeTagSize(fieldNumber) + computeRawVarint64Size(value);
+    return computeTagSize(fieldNumber) + computeInt64SizeNoTag(value);
   }
 
   public static int computeUInt32Size(int fieldNumber, int value) {
-    return computeTagSize(fieldNumber) + computeRawVarint32Size(value);
+    return computeTagSize(fieldNumber) + computeUInt32SizeNoTag(value);
   }
 
   public static int computeUInt64Size(int fieldNumber, long value) {
-    return computeTagSize(fieldNumber) + computeRawVarint64Size(value);
+    return computeTagSize(fieldNumber) + computeUInt64SizeNoTag(value);
   }
 
   public static int computeSInt32Size(int fieldNumber, int value) {
-    return computeTagSize(fieldNumber) + computeRawVarint32Size(encodeZigZag32(value));
+    return computeTagSize(fieldNumber) + computeSInt32SizeNoTag(value);
   }
 
   public static int computeSInt64Size(int fieldNumber, long value) {
-    return computeTagSize(fieldNumber) + computeRawVarint64Size(encodeZigZag64(value));
+    return computeTagSize(fieldNumber) + computeSInt64SizeNoTag(value);
   }
 
   public static int computeBoolSize(int fieldNumber, boolean value) {
-    return computeTagSize(fieldNumber) + 1;
+    return computeTagSize(fieldNumber) + computeBoolSizeNoTag(value);
   }
 
   public static int computeEnumSize(int fieldNumber, int value) {
-    return computeInt32Size(fieldNumber, value);
+    return computeTagSize(fieldNumber) + computeEnumSizeNoTag(value);
   }
 
   public static int computeFixed32Size(int fieldNumber, int value) {
-    return computeTagSize(fieldNumber) + 4;
+    return computeTagSize(fieldNumber) + computeFixed32SizeNoTag(value);
   }
 
   public static int computeSFixed32Size(int fieldNumber, int value) {
-    return computeTagSize(fieldNumber) + 4;
+    return computeTagSize(fieldNumber) + computeSFixed32SizeNoTag(value);
   }
 
   public static int computeFloatSize(int fieldNumber, float value) {
-    return computeTagSize(fieldNumber) + 4;
+    return computeTagSize(fieldNumber) + computeFloatSizeNoTag(value);
   }
 
   public static int computeFixed64Size(int fieldNumber, long value) {
-    return computeTagSize(fieldNumber) + 8;
+    return computeTagSize(fieldNumber) + computeFixed64SizeNoTag(value);
   }
 
   public static int computeSFixed64Size(int fieldNumber, long value) {
-    return computeTagSize(fieldNumber) + 8;
+    return computeTagSize(fieldNumber) + computeSFixed64SizeNoTag(value);
   }
 
   public static int computeDoubleSize(int fieldNumber, double value) {
-    return computeTagSize(fieldNumber) + 8;
+    return computeTagSize(fieldNumber) + computeDoubleSizeNoTag(value);
   }
 
   public static int computeStringSize(int fieldNumber, String value) {

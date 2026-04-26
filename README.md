@@ -150,8 +150,6 @@ Deliberate omissions, in order of likelihood we'd add support:
 
 - Proto3.
 - `map<K, V>`.
-- Packed repeated primitives (`[packed=true]` on the wire). Decoding falls
-  through to skip-unknown-field.
 - Extensions.
 - `[default=...]` field defaults. Unset fields read back as the type default
   (0/""/empty).

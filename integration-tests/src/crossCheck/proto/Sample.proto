@@ -28,6 +28,10 @@ message Sample {
   repeated string tags = 10;
   repeated Color colorPalette = 11;
 
+  repeated int32 packedInts = 12 [packed=true];
+  repeated fixed32 packedFixed32s = 13 [packed=true];
+  repeated double packedDoubles = 14 [packed=true];
+
   message Inner {
     optional int32 value = 1;
     optional string label = 2;

@@ -22,6 +22,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
 import dev.nemecec.protobuf.javamin.ByteString;
+import dev.nemecec.protobuf.javamin.CodedOutputStream;
 import dev.nemecec.protobuf.javamin.InvalidProtocolBufferException;
 import dev.nemecec.protobuf.javamin.UninitializedMessageException;
 import dev.nemecec.protobuf.javamin.integration.gen.Color;
@@ -227,6 +228,95 @@ class SampleRoundtripTest {
   }
 
   @Test
+  @DisplayName("packed repeated primitives — varint, fixed32, fixed64 — encode/decode roundtrip")
+  void packedRepeatedPrimitives() throws Exception {
+    Sample original = Sample.newBuilder()
+        .setName("required")
+        .addPackedInts(1)
+        .addPackedInts(-2)
+        .addAllPackedInts(Arrays.asList(300, 400_000))
+        .addPackedFixed32S(0xDEADBEEF)
+        .addPackedFixed32S(0x01020304)
+        .addPackedDoubles(3.14)
+        .addPackedDoubles(2.71828)
+        .addPackedDoubles(Double.NaN)
+        .build();
+
+    Sample roundtrip = Sample.parseFrom(original.toByteArray());
+
+    assertThat(roundtrip.getPackedIntsList()).containsExactly(1, -2, 300, 400_000);
+    assertThat(roundtrip.getPackedFixed32SList()).containsExactly(0xDEADBEEF, 0x01020304);
+    assertThat(roundtrip.getPackedDoublesCount()).isEqualTo(3);
+    assertThat(roundtrip.getPackedDoubles(0)).isEqualTo(3.14);
+    assertThat(roundtrip.getPackedDoubles(1)).isEqualTo(2.71828);
+    assertThat(Double.isNaN(roundtrip.getPackedDoubles(2))).isTrue();
+  }
+
+  @Test
+  @DisplayName("packed-encoded bytes parse into a field whose schema declares unpacked")
+  void packedBytesParseIntoUnpackedSchemaField() throws Exception {
+    // Spec: a parser must accept either form regardless of [packed=true] on the
+    // schema. colorPalette (field 11) is declared unpacked; we emit it as a
+    // single length-delimited block and verify the unpacked-schema parser
+    // tolerates the packed wire form.
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    CodedOutputStream out = CodedOutputStream.newInstance(baos);
+    out.writeString(2, "required");
+    out.writeTag(11, 2); // (fieldNumber=11, WIRETYPE_LENGTH_DELIMITED)
+    out.writeUInt32NoTag(5); // 5 enum values, each one varint byte
+    out.writeEnumNoTag(0); // RED
+    out.writeEnumNoTag(2); // BLUE
+    out.writeEnumNoTag(1); // GREEN
+    out.writeEnumNoTag(0); // RED
+    out.writeEnumNoTag(2); // BLUE
+    out.flush();
+
+    Sample s = Sample.parseFrom(baos.toByteArray());
+    assertThat(s.getColorPaletteList())
+        .containsExactly(Color.RED, Color.BLUE, Color.GREEN, Color.RED, Color.BLUE);
+  }
+
+  @Test
+  @DisplayName("unpacked-encoded bytes parse into a field whose schema declares [packed=true]")
+  void unpackedBytesParseIntoPackedSchemaField() throws Exception {
+    // The reverse tolerance: schema says [packed=true] but the peer emitted the
+    // unpacked form (per-element tags). The field reader's switch must include
+    // the unpacked tag so this still resolves.
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    CodedOutputStream out = CodedOutputStream.newInstance(baos);
+    out.writeString(2, "required");
+    out.writeInt32(12, 1);   // packedInts (field 12) — unpacked tag = 12<<3 | 0
+    out.writeInt32(12, -2);
+    out.writeInt32(12, 300);
+    out.flush();
+
+    Sample s = Sample.parseFrom(baos.toByteArray());
+    assertThat(s.getPackedIntsList()).containsExactly(1, -2, 300);
+  }
+
+  @Test
+  @DisplayName("packed encoding is byte-efficient: single tag + length, no per-element tags")
+  void packedEncodingShape() throws Exception {
+    // Three-element packedInts (1, 2, 3) should encode as:
+    //   tag(field=12, LD) [1 byte: 0x62]
+    //   length [1 byte: 3]
+    //   payload [3 bytes: 0x01, 0x02, 0x03]
+    // = 5 bytes total for the field. An unpacked encoding of the same content
+    // would cost 6 bytes (3 tags + 3 values).
+    Sample s = Sample.newBuilder()
+        .setName("x")
+        .addPackedInts(1).addPackedInts(2).addPackedInts(3)
+        .build();
+    byte[] wire = s.toByteArray();
+
+    // The packedInts portion of the wire (after `name` field):
+    //   name = "x": tag(0x12), length(0x01), 'x'
+    //   packedInts: tag(0x62), length(0x03), 0x01, 0x02, 0x03
+    assertThat(wire).containsSequence((byte) 0x62, (byte) 0x03,
+        (byte) 0x01, (byte) 0x02, (byte) 0x03);
+  }
+
+  @Test
   @DisplayName("getSerializedSize matches actual encoded length")
   void serializedSizeMatchesEncodedLength() throws Exception {
     Sample s = Sample.newBuilder()
@@ -235,6 +325,9 @@ class SampleRoundtripTest {
         .addTags("x")
         .addTags("yz")
         .addItems(Sample.Inner.newBuilder().setValue(99).setLabel("nested").build())
+        .addPackedInts(1).addPackedInts(-1).addPackedInts(400_000)
+        .addPackedFixed32S(0xCAFEBABE)
+        .addPackedDoubles(1.5).addPackedDoubles(-2.5)
         .build();
 
     assertThat(s.toByteArray().length).isEqualTo(s.getSerializedSize());
