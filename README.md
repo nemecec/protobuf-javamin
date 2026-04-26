@@ -202,13 +202,21 @@ Behavioural notes vs `protobuf-javalite`:
   in different orders for the same logical content. `Map.equals`/`hashCode`
   is by-content and order-independent, which is what generated `equals` /
   `hashCode` / cross-encoder tests rely on.
-- `map<K, EnumType>` follows the same forward-compat split as repeated enum
-  fields: storage is `Map<K, Integer>`, the public API exposes both the typed
-  `Map<K, EnumType>` view (built fresh on each `getXxxMap()` call, with
-  unrecognised numeric values dropped from the typed view) and a raw
-  `Map<K, Integer>` side-door via `getXxxValueMap()`. Use `putXxxValue(k, n)`
-  / `getXxxValueOrThrow(k)` when you need to round-trip an enum number whose
-  constant doesn't exist on this side.
+- Enum-typed fields ship an int-value side-door alongside the typed-enum
+  API on every shape — singular (`getXxxValue()`, `setXxxValue(int)`),
+  repeated (`getXxxValueList()`, `addXxxValue(int)`, `getXxxValue(int)`),
+  and map (`getXxxValueMap()`, `putXxxValue(K, int)`,
+  `getXxxValueOrDefault`/`OrThrow`). This is a superset of the proto2 API
+  surface stock `protobuf-java` emits — stock only emits the
+  `getXxxValue` family for proto3. We always emit it because the proto2
+  spec says unknown enum values on the wire have to round-trip; without
+  the int side-door, an unrecognised number would either disappear or
+  null out a typed accessor. Storage for repeated and map enum fields is
+  therefore `List<Integer>` / `Map<K, Integer>` (parallel to the int
+  view), and the typed view (`getXxxList()` / `getXxxMap()`) is built
+  fresh on each call by routing through `forNumber()`, with entries whose
+  number doesn't map to a known constant dropped from the typed view but
+  retained in the int side-door.
 
 Adding any of these is straightforward in the codegen and runtime if a need
 arises.
