@@ -4,6 +4,7 @@ assertj = "3.25.3"
 protobuf = "4.34.1"
 protobuf-gradle = "0.9.6"
 maven-publish = "0.35.0"
+shadow = "8.3.6"
 
 [libraries]
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
@@ -16,3 +17,4 @@ protoc = { module = "com.google.protobuf:protoc", version.ref = "protobuf" }
 [plugins]
 protobuf = { id = "com.google.protobuf", version.ref = "protobuf-gradle" }
 maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "maven-publish" }
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }

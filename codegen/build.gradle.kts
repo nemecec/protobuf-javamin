@@ -14,16 +14,28 @@
  * limitations under the License.
  */
 // protoc plugin. Reads CodeGeneratorRequest from stdin, emits Java source.
-// Build-time only — does not ship to the runtime classpath.
+//
+// Distributed in two flavours:
+//   * thin jar (no classifier) — the codegen classes only, with protobuf-java
+//     as a Maven dependency. For uncommon use cases like embedding the codegen.
+//   * shadow uber-jar (`:all` classifier) — codegen + bundled protobuf-java +
+//     `Main-Class` manifest. This is what consumers actually use: protoc resolves
+//     it from Maven via `artifact = "<g>:<a>:<v>:all@jar"` and runs it as
+//     `java -jar`. No separate install step on the consumer side.
 
 plugins {
-  application
+  alias(libs.plugins.shadow)
   alias(libs.plugins.maven.publish)
 }
 
+// Used in the manifest of the shadow uber-jar so `java -jar` finds the entry
+// point, and referenced by tests if they want to run the codegen in-process.
+val mainClassFqn = "dev.nemecec.protobuf.javamin.codegen.Main"
+
 dependencies {
-  // We use the official protobuf-java only to parse CodeGeneratorRequest at build
-  // time. The generated code we emit references only :runtime, never com.google.protobuf.
+  // Used at codegen time to parse CodeGeneratorRequest from stdin and emit
+  // CodeGeneratorResponse to stdout. Bundled into the published uber-jar
+  // (Shadow); never reaches the consumer's runtime classpath.
   implementation(libs.protobuf.java)
 
   testImplementation(platform(libs.junit.bom))
@@ -32,19 +44,26 @@ dependencies {
   testImplementation(libs.assertj.core)
 }
 
-application {
-  mainClass.set("dev.nemecec.protobuf.javamin.codegen.Main")
+// Shadow defaults to classifier "all" — keep it. We just need the Main-Class
+// manifest entry so `java -jar` works.
+tasks.shadowJar {
+  manifest {
+    attributes["Main-Class"] = mainClassFqn
+  }
+  // protobuf-java has META-INF/services entries; merge them so Shadow doesn't
+  // overwrite one with another.
+  mergeServiceFiles()
 }
 
 mavenPublishing {
   publishToMavenCentral(automaticRelease = true)
   signAllPublications()
 
-  coordinates(group.toString(), "codegen", version.toString())
+  coordinates(group.toString(), "protobuf-javamin-codegen", version.toString())
 
   pom {
     name.set("protobuf-javamin codegen")
-    description.set("protoc plugin that emits Java source for protobuf-javamin's lean runtime.")
+    description.set("protoc plugin (executable uber-jar) that emits Java source for protobuf-javamin's lean runtime.")
     url.set("https://github.com/nemecec/protobuf-javamin")
     licenses {
       license {
@@ -66,7 +85,10 @@ mavenPublishing {
   }
 }
 
-// Gradle 9 requires the implicit metadata→javadoc dependency to be declared.
+// vanniktech-maven-publish ≥ 0.31 auto-attaches the Shadow `:all` jar to the
+// same publication when Shadow is on the classpath, so we don't add it manually
+// here. Just declare the implicit metadata→javadoc dependency that Gradle 9
+// requires.
 afterEvaluate {
   tasks.named("generateMetadataFileForMavenPublication") {
     dependsOn(tasks.named("plainJavadocJar"))

@@ -48,10 +48,11 @@ protobuf {
   }
   plugins {
     id("javamin") {
-      // Reuse the application-style launcher script the codegen module produces.
-      // It's an executable shell script that puts our plugin's jar on the classpath
-      // and runs Main; protoc invokes it as a child process.
-      path = "${rootProject.projectDir}/codegen/build/install/codegen/bin/codegen"
+      // Resolve the codegen uber-jar (`:all` classifier, `@jar` extension)
+      // from a Maven repo — mavenLocal in this in-tree test. protoc downloads
+      // it and invokes via `java -jar`. This is exactly the pattern downstream
+      // consumers will use.
+      artifact = "dev.nemecec.protobuf.javamin:protobuf-javamin-codegen:${project.version}:all@jar"
     }
   }
   generateProtoTasks {
@@ -62,9 +63,15 @@ protobuf {
       plugins {
         id("javamin")
       }
-      dependsOn(":codegen:installDist")
+      // Make sure the codegen artifact has been published locally before
+      // protobuf-gradle-plugin tries to resolve it.
+      dependsOn(":codegen:publishToMavenLocal")
     }
   }
+}
+
+repositories {
+  mavenLocal()
 }
 
 sourceSets {

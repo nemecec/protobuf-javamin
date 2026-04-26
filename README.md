@@ -28,7 +28,7 @@ the official Google runtimes:
 |---|---|---|
 | `com.google.protobuf:protobuf-java:4.34.1` | 1.9 MB | ~660 |
 | `com.google.protobuf:protobuf-javalite:4.34.1` | 1067 KB | 534 |
-| **`dev.nemecec.protobuf.javamin:runtime`** | **20 KB** | **11** |
+| **`dev.nemecec.protobuf.javamin:protobuf-javamin-runtime`** | **20 KB** | **11** |
 
 The runtime numbers above are repo-anchored: build it yourself.
 
@@ -66,14 +66,16 @@ plugins {
 }
 
 dependencies {
-  implementation("dev.nemecec.protobuf.javamin:runtime")
+  implementation("dev.nemecec.protobuf.javamin:protobuf-javamin-runtime:0.1.0")
 }
 
 protobuf {
   protoc { artifact = "com.google.protobuf:protoc:4.34.1" }
   plugins {
     id("javamin") {
-      path = "<path-to-codegen>/build/install/codegen/bin/codegen"
+      // Resolved from Maven Central as an executable uber-jar (`:all`
+      // classifier, `@jar` extension); protoc runs it via `java -jar`.
+      artifact = "dev.nemecec.protobuf.javamin:protobuf-javamin-codegen:0.1.0:all@jar"
     }
   }
   generateProtoTasks {

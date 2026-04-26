@@ -34,7 +34,7 @@ mavenPublishing {
   publishToMavenCentral(automaticRelease = true)
   signAllPublications()
 
-  coordinates(group.toString(), "runtime", version.toString())
+  coordinates(group.toString(), "protobuf-javamin-runtime", version.toString())
 
   pom {
     name.set("protobuf-javamin runtime")
