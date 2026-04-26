@@ -149,8 +149,6 @@ updated.
 Deliberate omissions, in order of likelihood we'd add support:
 
 - Proto3.
-- `map<K, enum>` — the rest of `map<K, V>` is supported; enum-valued maps need
-  an Integer-storage / typed-enum-API split that the v1 codegen doesn't emit.
 - Extensions.
 - Reflection / `Descriptors` (defeats the point of being lean).
 - Text format / JSON serialisation.
@@ -176,6 +174,13 @@ Behavioural notes vs `protobuf-javalite`:
   in different orders for the same logical content. `Map.equals`/`hashCode`
   is by-content and order-independent, which is what generated `equals` /
   `hashCode` / cross-encoder tests rely on.
+- `map<K, EnumType>` follows the same forward-compat split as repeated enum
+  fields: storage is `Map<K, Integer>`, the public API exposes both the typed
+  `Map<K, EnumType>` view (built fresh on each `getXxxMap()` call, with
+  unrecognised numeric values dropped from the typed view) and a raw
+  `Map<K, Integer>` side-door via `getXxxValueMap()`. Use `putXxxValue(k, n)`
+  / `getXxxValueOrThrow(k)` when you need to round-trip an enum number whose
+  constant doesn't exist on this side.
 
 Adding any of these is straightforward in the codegen and runtime if a need
 arises.

@@ -275,7 +275,7 @@ final class MessageWriter {
         // mutation is caught immediately.
         sb.append(binner).append("  m.").append(fieldName(f)).append(" = ").append(fieldName(f))
             .append(".isEmpty() ? Internal.<").append(mapKeyJavaType(f)).append(", ")
-            .append(mapValueJavaType(f)).append(">emptyMap() : Collections.unmodifiableMap(")
+            .append(mapValueStorageType(f)).append(">emptyMap() : Collections.unmodifiableMap(")
             .append(fieldName(f)).append(");\n");
       } else if (f.getLabel() == Label.LABEL_REPEATED) {
         // Freeze the list: assign as Collections.unmodifiableList wrapping the current ArrayList,
@@ -424,7 +424,7 @@ final class MessageWriter {
   private void writeFieldDeclarations(StringBuilder sb, FieldDescriptorProto f, String indent) {
     if (isMap(f)) {
       sb.append(indent).append("private Map<").append(mapKeyJavaType(f)).append(", ")
-          .append(mapValueJavaType(f)).append("> ")
+          .append(mapValueStorageType(f)).append("> ")
           .append(fieldName(f)).append(" = Internal.emptyMap();\n");
     } else if (f.getLabel() == Label.LABEL_REPEATED) {
       sb.append(indent).append("private List<").append(repeatedStorageType(f)).append("> ")
@@ -1224,82 +1224,199 @@ final class MessageWriter {
     return boxedJavaType(mapKey(f));
   }
 
-  /** Java type used in the {@code Map<?, V>} declaration. For message values,
-   *  the FQN of the message type; for scalars, the boxed primitive. We don't
-   *  yet support enum-valued maps — javalite stores those as {@code Integer}
-   *  but exposes the typed enum API on top, which is more codegen than v1
-   *  warrants. The check here is defensive — protoc validates field types. */
-  private String mapValueJavaType(FieldDescriptorProto f) {
+  /** Storage type for the value side of a map. Enums are stored as
+   *  {@code Integer} (parallel to {@link #repeatedStorageType}) so the wire
+   *  reader's {@code readEnum() → int} drops in directly without bridging
+   *  through the typed enum class, and unknown enum values can survive a
+   *  parse without being silently coerced. */
+  private String mapValueStorageType(FieldDescriptorProto f) {
     FieldDescriptorProto v = mapValue(f);
-    if (FieldKind.from(v.getType()) == FieldKind.ENUM) {
-      throw new IllegalStateException(
-          "map<K, enum> is not yet supported by protobuf-javamin (field "
-              + f.getName() + "). Use an int-typed value type for now.");
-    }
+    if (FieldKind.from(v.getType()) == FieldKind.ENUM) return "Integer";
     return boxedJavaType(v);
+  }
+
+  /** Public-API value type — the typed enum class for enum-valued maps,
+   *  same as the storage type for everything else. */
+  private String mapValueApiType(FieldDescriptorProto f) {
+    return boxedJavaType(mapValue(f));
+  }
+
+  private boolean isEnumValueMap(FieldDescriptorProto f) {
+    return FieldKind.from(mapValue(f).getType()) == FieldKind.ENUM;
   }
 
   /** Read-only accessors shared by message and builder for a map field —
    *  mirrors the javalite-style API: getXxxMap, getXxxCount, containsXxx,
-   *  getXxxOrDefault, getXxxOrThrow. */
+   *  getXxxOrDefault, getXxxOrThrow.
+   *
+   *  <p>For {@code map<K, EnumType>} fields the storage stays {@code Integer}-
+   *  backed (mirrors how repeated enum lists are stored as {@code List<Integer>}
+   *  for forward compat with unknown enum values). The typed-enum API
+   *  (getXxxMap, getXxxOrDefault, getXxxOrThrow) builds the typed view via
+   *  {@code forNumber()}; an int-value side-door (getXxxValueMap,
+   *  getXxxValueOrDefault, getXxxValueOrThrow) exposes the raw storage so a
+   *  parsed-but-unknown enum value can still be inspected. */
   private void writeMapReadOnlyAccessors(StringBuilder sb, FieldDescriptorProto f, String indent, String capName) {
     String fld = fieldName(f);
     String k = mapKeyJavaType(f);
-    String v = mapValueJavaType(f);
+    boolean enumValue = isEnumValueMap(f);
+    String storageV = mapValueStorageType(f);
+    String apiV = mapValueApiType(f);
 
-    // The unmodifiable wrapper makes accidental mutation (e.g. iterating and
-    // calling Iterator.remove() on a getXxxMap() reference) fail loudly rather
-    // than silently mutating the message. Same property as repeated getXxxList().
-    sb.append(indent).append("public Map<").append(k).append(", ").append(v).append("> get")
-        .append(capName).append("Map() { return Collections.unmodifiableMap(").append(fld).append("); }\n");
+    if (enumValue) {
+      // Typed view: build a fresh LinkedHashMap by converting each int via
+      // forNumber. Unknown enum values (forNumber == null) are dropped from
+      // the typed view but remain visible through the int-value side-door
+      // below — same trade-off javalite makes for repeated enum lists.
+      sb.append(indent).append("public Map<").append(k).append(", ").append(apiV).append("> get")
+          .append(capName).append("Map() {\n");
+      sb.append(indent).append("  Map<").append(k).append(", ").append(apiV).append("> out = new LinkedHashMap<")
+          .append(k).append(", ").append(apiV).append(">(").append(fld).append(".size());\n");
+      sb.append(indent).append("  for (Map.Entry<").append(k).append(", Integer> e : ").append(fld)
+          .append(".entrySet()) {\n");
+      sb.append(indent).append("    ").append(apiV).append(" t = ").append(apiV)
+          .append(".forNumber(e.getValue());\n");
+      sb.append(indent).append("    if (t != null) out.put(e.getKey(), t);\n");
+      sb.append(indent).append("  }\n");
+      sb.append(indent).append("  return Collections.unmodifiableMap(out);\n");
+      sb.append(indent).append("}\n");
+
+      sb.append(indent).append("public Map<").append(k).append(", Integer> get").append(capName)
+          .append("ValueMap() { return Collections.unmodifiableMap(").append(fld).append("); }\n");
+    } else {
+      // The unmodifiable wrapper makes accidental mutation (e.g. iterating and
+      // calling Iterator.remove() on a getXxxMap() reference) fail loudly rather
+      // than silently mutating the message. Same property as repeated getXxxList().
+      sb.append(indent).append("public Map<").append(k).append(", ").append(storageV).append("> get")
+          .append(capName).append("Map() { return Collections.unmodifiableMap(").append(fld).append("); }\n");
+    }
+
     sb.append(indent).append("public int get").append(capName).append("Count() { return ")
         .append(fld).append(".size(); }\n");
     sb.append(indent).append("public boolean contains").append(capName).append("(").append(k)
         .append(" key) { if (key == null) throw new NullPointerException(); return ")
         .append(fld).append(".containsKey(key); }\n");
-    sb.append(indent).append("public ").append(v).append(" get").append(capName)
-        .append("OrDefault(").append(k).append(" key, ").append(v).append(" defaultValue) {\n");
-    sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
-    sb.append(indent).append("  return ").append(fld).append(".getOrDefault(key, defaultValue);\n");
-    sb.append(indent).append("}\n");
-    sb.append(indent).append("public ").append(v).append(" get").append(capName)
-        .append("OrThrow(").append(k).append(" key) {\n");
-    sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
-    sb.append(indent).append("  ").append(v).append(" v = ").append(fld).append(".get(key);\n");
-    sb.append(indent).append("  if (v == null && !").append(fld).append(".containsKey(key))\n");
-    sb.append(indent).append("    throw new IllegalArgumentException(\"key not in map: \" + key);\n");
-    sb.append(indent).append("  return v;\n");
-    sb.append(indent).append("}\n");
+
+    if (enumValue) {
+      // Typed getOrDefault: forNumber on the int; if storage misses the key
+      // OR the value is an unknown number, hand back the caller's default.
+      sb.append(indent).append("public ").append(apiV).append(" get").append(capName)
+          .append("OrDefault(").append(k).append(" key, ").append(apiV).append(" defaultValue) {\n");
+      sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  Integer raw = ").append(fld).append(".get(key);\n");
+      sb.append(indent).append("  if (raw == null) return defaultValue;\n");
+      sb.append(indent).append("  ").append(apiV).append(" t = ").append(apiV).append(".forNumber(raw);\n");
+      sb.append(indent).append("  return t != null ? t : defaultValue;\n");
+      sb.append(indent).append("}\n");
+      sb.append(indent).append("public int get").append(capName).append("ValueOrDefault(").append(k)
+          .append(" key, int defaultValue) {\n");
+      sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  Integer raw = ").append(fld).append(".get(key);\n");
+      sb.append(indent).append("  return raw != null ? raw.intValue() : defaultValue;\n");
+      sb.append(indent).append("}\n");
+
+      sb.append(indent).append("public ").append(apiV).append(" get").append(capName)
+          .append("OrThrow(").append(k).append(" key) {\n");
+      sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  Integer raw = ").append(fld).append(".get(key);\n");
+      sb.append(indent).append("  if (raw == null && !").append(fld).append(".containsKey(key))\n");
+      sb.append(indent).append("    throw new IllegalArgumentException(\"key not in map: \" + key);\n");
+      sb.append(indent).append("  ").append(apiV).append(" t = ").append(apiV).append(".forNumber(raw);\n");
+      sb.append(indent).append("  if (t == null)\n");
+      sb.append(indent).append("    throw new IllegalArgumentException(\"unknown enum value at key \" + key + \": \" + raw);\n");
+      sb.append(indent).append("  return t;\n");
+      sb.append(indent).append("}\n");
+      sb.append(indent).append("public int get").append(capName).append("ValueOrThrow(").append(k)
+          .append(" key) {\n");
+      sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  Integer raw = ").append(fld).append(".get(key);\n");
+      sb.append(indent).append("  if (raw == null && !").append(fld).append(".containsKey(key))\n");
+      sb.append(indent).append("    throw new IllegalArgumentException(\"key not in map: \" + key);\n");
+      sb.append(indent).append("  return raw.intValue();\n");
+      sb.append(indent).append("}\n");
+    } else {
+      sb.append(indent).append("public ").append(storageV).append(" get").append(capName)
+          .append("OrDefault(").append(k).append(" key, ").append(storageV).append(" defaultValue) {\n");
+      sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  return ").append(fld).append(".getOrDefault(key, defaultValue);\n");
+      sb.append(indent).append("}\n");
+      sb.append(indent).append("public ").append(storageV).append(" get").append(capName)
+          .append("OrThrow(").append(k).append(" key) {\n");
+      sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  ").append(storageV).append(" v = ").append(fld).append(".get(key);\n");
+      sb.append(indent).append("  if (v == null && !").append(fld).append(".containsKey(key))\n");
+      sb.append(indent).append("    throw new IllegalArgumentException(\"key not in map: \" + key);\n");
+      sb.append(indent).append("  return v;\n");
+      sb.append(indent).append("}\n");
+    }
   }
 
   /** Builder-only mutators for a map field — putXxx, putAllXxx, removeXxx,
    *  clearXxx, plus the lazy ensureMutable that lifts the empty-singleton
-   *  storage to a real LinkedHashMap on the first put. */
+   *  storage to a real LinkedHashMap on the first put. For
+   *  {@code map<K, EnumType>} the typed putXxx/putAllXxx are mirrored by an
+   *  int-value side-door (putXxxValue) so callers can stash a wire value
+   *  whose enum constant they don't recognise. */
   private void writeMapMutators(StringBuilder sb, FieldDescriptorProto f, String indent, String capName) {
     String fld = fieldName(f);
     String k = mapKeyJavaType(f);
-    String v = mapValueJavaType(f);
+    boolean enumValue = isEnumValueMap(f);
+    String storageV = mapValueStorageType(f);
+    String apiV = mapValueApiType(f);
 
-    sb.append(indent).append("public Builder put").append(capName).append("(").append(k)
-        .append(" key, ").append(v).append(" value) {\n");
-    sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
-    sb.append(indent).append("  if (value == null) throw new NullPointerException();\n");
-    sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
-    sb.append(indent).append("  ").append(fld).append(".put(key, value);\n");
-    sb.append(indent).append("  return this;\n");
-    sb.append(indent).append("}\n");
+    if (enumValue) {
+      // Typed put: stash value.getNumber() into the int-backed storage.
+      sb.append(indent).append("public Builder put").append(capName).append("(").append(k)
+          .append(" key, ").append(apiV).append(" value) {\n");
+      sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  if (value == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+      sb.append(indent).append("  ").append(fld).append(".put(key, value.getNumber());\n");
+      sb.append(indent).append("  return this;\n");
+      sb.append(indent).append("}\n");
+      // Int-value side-door — lets callers route an unknown enum number into
+      // storage without inventing a typed-enum constant for it.
+      sb.append(indent).append("public Builder put").append(capName).append("Value(").append(k)
+          .append(" key, int value) {\n");
+      sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+      sb.append(indent).append("  ").append(fld).append(".put(key, value);\n");
+      sb.append(indent).append("  return this;\n");
+      sb.append(indent).append("}\n");
 
-    sb.append(indent).append("public Builder putAll").append(capName).append("(Map<? extends ")
-        .append(k).append(", ? extends ").append(v).append("> values) {\n");
-    sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
-    sb.append(indent).append("  for (Map.Entry<? extends ").append(k).append(", ? extends ").append(v)
-        .append("> e : values.entrySet()) {\n");
-    sb.append(indent).append("    if (e.getKey() == null) throw new NullPointerException();\n");
-    sb.append(indent).append("    if (e.getValue() == null) throw new NullPointerException();\n");
-    sb.append(indent).append("    ").append(fld).append(".put(e.getKey(), e.getValue());\n");
-    sb.append(indent).append("  }\n");
-    sb.append(indent).append("  return this;\n");
-    sb.append(indent).append("}\n");
+      sb.append(indent).append("public Builder putAll").append(capName).append("(Map<? extends ")
+          .append(k).append(", ? extends ").append(apiV).append("> values) {\n");
+      sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+      sb.append(indent).append("  for (Map.Entry<? extends ").append(k).append(", ? extends ").append(apiV)
+          .append("> e : values.entrySet()) {\n");
+      sb.append(indent).append("    if (e.getKey() == null) throw new NullPointerException();\n");
+      sb.append(indent).append("    if (e.getValue() == null) throw new NullPointerException();\n");
+      sb.append(indent).append("    ").append(fld).append(".put(e.getKey(), e.getValue().getNumber());\n");
+      sb.append(indent).append("  }\n");
+      sb.append(indent).append("  return this;\n");
+      sb.append(indent).append("}\n");
+    } else {
+      sb.append(indent).append("public Builder put").append(capName).append("(").append(k)
+          .append(" key, ").append(storageV).append(" value) {\n");
+      sb.append(indent).append("  if (key == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  if (value == null) throw new NullPointerException();\n");
+      sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+      sb.append(indent).append("  ").append(fld).append(".put(key, value);\n");
+      sb.append(indent).append("  return this;\n");
+      sb.append(indent).append("}\n");
+
+      sb.append(indent).append("public Builder putAll").append(capName).append("(Map<? extends ")
+          .append(k).append(", ? extends ").append(storageV).append("> values) {\n");
+      sb.append(indent).append("  ensure").append(capName).append("Mutable();\n");
+      sb.append(indent).append("  for (Map.Entry<? extends ").append(k).append(", ? extends ").append(storageV)
+          .append("> e : values.entrySet()) {\n");
+      sb.append(indent).append("    if (e.getKey() == null) throw new NullPointerException();\n");
+      sb.append(indent).append("    if (e.getValue() == null) throw new NullPointerException();\n");
+      sb.append(indent).append("    ").append(fld).append(".put(e.getKey(), e.getValue());\n");
+      sb.append(indent).append("  }\n");
+      sb.append(indent).append("  return this;\n");
+      sb.append(indent).append("}\n");
+    }
 
     sb.append(indent).append("public Builder remove").append(capName).append("(").append(k)
         .append(" key) {\n");
@@ -1316,7 +1433,7 @@ final class MessageWriter {
     // LinkedHashMap mirrors javalite's MapField iteration order (insertion-
     // order), so emitted bytes are deterministic given a fixed put-sequence.
     sb.append(indent).append("  if (!(").append(fld).append(" instanceof LinkedHashMap)) ")
-        .append(fld).append(" = new LinkedHashMap<").append(k).append(", ").append(v).append(">(")
+        .append(fld).append(" = new LinkedHashMap<").append(k).append(", ").append(storageV).append(">(")
         .append(fld).append(");\n");
     sb.append(indent).append("}\n");
   }
@@ -1328,7 +1445,7 @@ final class MessageWriter {
     int n = f.getNumber();
     String fld = fieldName(f);
     String k = mapKeyJavaType(f);
-    String v = mapValueJavaType(f);
+    String v = mapValueStorageType(f);
     FieldDescriptorProto kf = mapKey(f);
     FieldDescriptorProto vf = mapValue(f);
 
@@ -1357,7 +1474,7 @@ final class MessageWriter {
     int n = f.getNumber();
     String fld = fieldName(f);
     String k = mapKeyJavaType(f);
-    String v = mapValueJavaType(f);
+    String v = mapValueStorageType(f);
     FieldDescriptorProto kf = mapKey(f);
     FieldDescriptorProto vf = mapValue(f);
 
@@ -1380,7 +1497,7 @@ final class MessageWriter {
     String fld = fieldName(f);
     String capName = capitalize(f.getName());
     String k = mapKeyJavaType(f);
-    String v = mapValueJavaType(f);
+    String v = mapValueStorageType(f);
     FieldDescriptorProto kf = mapKey(f);
     FieldDescriptorProto vf = mapValue(f);
     int keyTag = (1 << 3) | wireType(kf);

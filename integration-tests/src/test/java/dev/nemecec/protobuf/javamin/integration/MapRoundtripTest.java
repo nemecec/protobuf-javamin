@@ -19,7 +19,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.nemecec.protobuf.javamin.ByteString;
+import dev.nemecec.protobuf.javamin.CodedOutputStream;
+import dev.nemecec.protobuf.javamin.integration.gen.Color;
 import dev.nemecec.protobuf.javamin.integration.gen.Sample;
+import java.io.ByteArrayOutputStream;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -133,6 +136,7 @@ class MapRoundtripTest {
         .putStringToInner("b", Sample.Inner.newBuilder().setValue(2).setLabel("y").build())
         .putLongToBytes(99L, ByteString.copyFromUtf8("payload-1"))
         .putLongToBytes(100L, ByteString.copyFromUtf8("payload-2"))
+        .putStringToColor("first", Color.RED).putStringToColor("second", Color.BLUE)
         .build();
 
     Sample roundtrip = Sample.parseFrom(original.toByteArray());
@@ -145,6 +149,8 @@ class MapRoundtripTest {
         .containsExactlyInAnyOrderEntriesOf(original.getStringToInnerMap());
     assertThat(roundtrip.getLongToBytesMap())
         .containsExactlyInAnyOrderEntriesOf(original.getLongToBytesMap());
+    assertThat(roundtrip.getStringToColorMap())
+        .containsExactlyInAnyOrderEntriesOf(original.getStringToColorMap());
 
     // equals / hashCode are content-equal regardless of iteration order.
     assertThat(roundtrip).isEqualTo(original);
@@ -173,9 +179,86 @@ class MapRoundtripTest {
         .putIntToString(-1, "negative-key")
         .putStringToInner("nested", Sample.Inner.newBuilder().setValue(7).setLabel("deep").build())
         .putLongToBytes(0L, ByteString.copyFromUtf8("zero-key-payload"))
+        .putStringToColor("colour", Color.BLUE)
         .build();
 
     assertThat(s.toByteArray().length).isEqualTo(s.getSerializedSize());
+  }
+
+  @Test
+  @DisplayName("map<K, EnumType> — typed put/get and the int-value side-door")
+  void enumValuedMapTypedAndValueApi() {
+    Sample.Builder b = Sample.newBuilder()
+        .setName("required")
+        .putStringToColor("first", Color.RED)
+        .putStringToColor("second", Color.BLUE)
+        .putStringToColorValue("raw", 1);   // BLUE via the int side-door
+
+    // Typed view materialises a fresh Map<String, Color> built via forNumber.
+    Map<String, Color> typed = b.getStringToColorMap();
+    assertThat(typed)
+        .containsEntry("first", Color.RED)
+        .containsEntry("second", Color.BLUE)
+        .containsEntry("raw", Color.GREEN); // value 1 == GREEN per Sample.proto
+    assertThat(typed).hasSize(3);
+
+    // Value-side map exposes raw int storage so callers can see (and round-
+    // trip) values whose enum constant doesn't exist on this side.
+    assertThat(b.getStringToColorValueMap())
+        .containsEntry("first", 0)
+        .containsEntry("second", 2)
+        .containsEntry("raw", 1);
+
+    // Typed accessors:
+    assertThat(b.getStringToColorOrDefault("first", Color.GREEN)).isEqualTo(Color.RED);
+    assertThat(b.getStringToColorOrDefault("missing", Color.GREEN)).isEqualTo(Color.GREEN);
+    assertThat(b.getStringToColorOrThrow("second")).isEqualTo(Color.BLUE);
+
+    // Int side-door accessors:
+    assertThat(b.getStringToColorValueOrDefault("first", -1)).isEqualTo(0);
+    assertThat(b.getStringToColorValueOrDefault("missing", -1)).isEqualTo(-1);
+    assertThat(b.getStringToColorValueOrThrow("raw")).isEqualTo(1);
+    assertThatThrownBy(() -> b.getStringToColorOrThrow("missing"))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  @DisplayName("map<K, EnumType> — unknown wire enum value survives parse via the int side-door")
+  void enumValuedMapToleratesUnknownNumberOnTheWire() throws Exception {
+    // Hand-craft wire bytes for a Sample with a single stringToColor entry
+    // whose enum value is 99 — a number that doesn't correspond to any
+    // declared Color constant. Verifies that:
+    //   * parse doesn't throw
+    //   * the typed view drops the entry (forNumber returns null)
+    //   * the int-value side-door still surfaces it
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    CodedOutputStream out = CodedOutputStream.newInstance(baos);
+    out.writeString(2, "required");
+    // Build the entry payload first so we know its byte length.
+    ByteArrayOutputStream entryBaos = new ByteArrayOutputStream();
+    CodedOutputStream entry = CodedOutputStream.newInstance(entryBaos);
+    entry.writeString(1, "k");
+    entry.writeEnum(2, 99); // unknown enum value
+    entry.flush();
+    byte[] entryBytes = entryBaos.toByteArray();
+    out.writeTag(19, 2);
+    out.writeUInt32NoTag(entryBytes.length);
+    out.writeRawBytes(entryBytes);
+    out.flush();
+
+    Sample s = Sample.parseFrom(baos.toByteArray());
+    assertThat(s.getStringToColorCount()).isEqualTo(1);
+    assertThat(s.containsStringToColor("k")).isTrue();
+    // Typed view drops the unknown entry.
+    assertThat(s.getStringToColorMap()).isEmpty();
+    // int side-door keeps it.
+    assertThat(s.getStringToColorValueMap()).containsEntry("k", 99);
+    assertThat(s.getStringToColorValueOrThrow("k")).isEqualTo(99);
+    // OrThrow on the typed accessor flags the unknown value rather than
+    // returning null (which would be an unsafe Map<String, Color> contents).
+    assertThatThrownBy(() -> s.getStringToColorOrThrow("k"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("unknown enum value");
   }
 
   @Test
@@ -187,6 +270,7 @@ class MapRoundtripTest {
         .putIntToString(42, "answer")
         .putStringToInner("nested", Sample.Inner.newBuilder().setValue(7).setLabel("deep").build())
         .putLongToBytes(99L, ByteString.copyFromUtf8("payload"))
+        .putStringToColor("a", Color.RED).putStringToColor("b", Color.BLUE)
         .build();
 
     dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Sample dst =
@@ -198,6 +282,10 @@ class MapRoundtripTest {
     assertThat(dst.getStringToInnerOrThrow("nested").getValue()).isEqualTo(7);
     assertThat(dst.getStringToInnerOrThrow("nested").getLabel()).isEqualTo("deep");
     assertThat(dst.getLongToBytesOrThrow(99L).toStringUtf8()).isEqualTo("payload");
+    assertThat(dst.getStringToColorMap())
+        .containsEntry("a", dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Color.RED)
+        .containsEntry("b", dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Color.BLUE)
+        .hasSize(2);
   }
 
   @Test
@@ -216,6 +304,8 @@ class MapRoundtripTest {
                 dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Sample.Inner.newBuilder()
                     .setValue(7).setLabel("deep").build())
             .putLongToBytes(99L, com.google.protobuf.ByteString.copyFromUtf8("payload"))
+            .putStringToColor("a", dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Color.RED)
+            .putStringToColor("b", dev.nemecec.protobuf.javamin.integration.crosscheck.gen.Color.GREEN)
             .build();
 
     Sample dst = Sample.parseFrom(src.toByteArray());
@@ -226,5 +316,9 @@ class MapRoundtripTest {
     assertThat(dst.getStringToInnerOrThrow("nested").getValue()).isEqualTo(7);
     assertThat(dst.getStringToInnerOrThrow("nested").getLabel()).isEqualTo("deep");
     assertThat(dst.getLongToBytesOrThrow(99L).toStringUtf8()).isEqualTo("payload");
+    assertThat(dst.getStringToColorMap())
+        .containsEntry("a", Color.RED)
+        .containsEntry("b", Color.GREEN)
+        .hasSize(2);
   }
 }

@@ -36,6 +36,7 @@ message Sample {
   map<int32, string> intToString = 16;
   map<string, Inner> stringToInner = 17;
   map<int64, bytes> longToBytes = 18;
+  map<string, Color> stringToColor = 19;
 
   message Inner {
     optional int32 value = 1;

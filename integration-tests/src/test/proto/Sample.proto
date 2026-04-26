@@ -36,6 +36,10 @@ message Sample {
   map<int32, string> intToString = 16;
   map<string, Inner> stringToInner = 17;
   map<int64, bytes> longToBytes = 18;
+  // Enum-valued map — storage stays Integer-backed so unknown enum values
+  // arriving on the wire don't get coerced; the public API mirrors how
+  // repeated enum lists work (typed view + int side-door).
+  map<string, Color> stringToColor = 19;
 
   message Inner {
     optional int32 value = 1;
