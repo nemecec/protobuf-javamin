@@ -16,12 +16,53 @@
 // Lean device-side runtime. Zero runtime dependencies.
 // Generated proto classes reference only types from this module.
 
+plugins {
+  alias(libs.plugins.maven.publish)
+}
+
 dependencies {
-  testImplementation(platform("org.junit:junit-bom:5.10.2"))
-  testImplementation("org.junit.jupiter:junit-jupiter")
-  testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-  testImplementation("org.assertj:assertj-core:3.25.3")
+  testImplementation(platform(libs.junit.bom))
+  testImplementation(libs.junit.jupiter)
+  testRuntimeOnly(libs.junit.platform.launcher)
+  testImplementation(libs.assertj.core)
 
   // Used in tests to verify wire-format compatibility against Google's encoder.
-  testImplementation("com.google.protobuf:protobuf-java:4.34.1")
+  testImplementation(libs.protobuf.java)
+}
+
+mavenPublishing {
+  publishToMavenCentral(automaticRelease = true)
+  signAllPublications()
+
+  coordinates(group.toString(), "runtime", version.toString())
+
+  pom {
+    name.set("protobuf-javamin runtime")
+    description.set("Lean proto2 wire-format runtime for tightly memory-constrained JVMs.")
+    url.set("https://github.com/nemecec/protobuf-javamin")
+    licenses {
+      license {
+        name.set("Apache License, Version 2.0")
+        url.set("https://www.apache.org/licenses/LICENSE-2.0")
+      }
+    }
+    developers {
+      developer {
+        id.set("nemecec")
+        name.set("Neeme Praks")
+      }
+    }
+    scm {
+      url.set("https://github.com/nemecec/protobuf-javamin")
+      connection.set("scm:git:git://github.com/nemecec/protobuf-javamin.git")
+      developerConnection.set("scm:git:ssh://git@github.com/nemecec/protobuf-javamin.git")
+    }
+  }
+}
+
+// Gradle 9 requires the implicit metadata→javadoc dependency to be declared.
+afterEvaluate {
+  tasks.named("generateMetadataFileForMavenPublication") {
+    dependsOn(tasks.named("plainJavadocJar"))
+  }
 }

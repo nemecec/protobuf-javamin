@@ -33,6 +33,9 @@ subprojects {
     toolchain {
       languageVersion.set(JavaLanguageVersion.of(8))
     }
+    // Sources + javadoc jars are added automatically by the vanniktech publish
+    // plugin on published subprojects; we don't need (and must not duplicate)
+    // them here.
   }
 
   tasks.withType<JavaCompile>().configureEach {
@@ -42,4 +45,15 @@ subprojects {
   tasks.withType<Test>().configureEach {
     useJUnitPlatform()
   }
+
+  // Don't fail the build on missing-doc warnings — our javadoc is informal.
+  tasks.withType<Javadoc>().configureEach {
+    (options as StandardJavadocDocletOptions).addStringOption("Xdoclint:none", "-quiet")
+  }
+
+  // Sign only when in-memory keys are provided (CI). Local builds skip signing.
+  tasks.withType<Sign>().configureEach {
+    enabled = project.findProperty("signingInMemoryKey") != null
+  }
+
 }

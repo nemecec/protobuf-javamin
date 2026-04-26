@@ -18,19 +18,57 @@
 
 plugins {
   application
+  alias(libs.plugins.maven.publish)
 }
 
 dependencies {
   // We use the official protobuf-java only to parse CodeGeneratorRequest at build
   // time. The generated code we emit references only :runtime, never com.google.protobuf.
-  implementation("com.google.protobuf:protobuf-java:4.34.1")
+  implementation(libs.protobuf.java)
 
-  testImplementation(platform("org.junit:junit-bom:5.10.2"))
-  testImplementation("org.junit.jupiter:junit-jupiter")
-  testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-  testImplementation("org.assertj:assertj-core:3.25.3")
+  testImplementation(platform(libs.junit.bom))
+  testImplementation(libs.junit.jupiter)
+  testRuntimeOnly(libs.junit.platform.launcher)
+  testImplementation(libs.assertj.core)
 }
 
 application {
   mainClass.set("dev.nemecec.protobuf.javamin.codegen.Main")
+}
+
+mavenPublishing {
+  publishToMavenCentral(automaticRelease = true)
+  signAllPublications()
+
+  coordinates(group.toString(), "codegen", version.toString())
+
+  pom {
+    name.set("protobuf-javamin codegen")
+    description.set("protoc plugin that emits Java source for protobuf-javamin's lean runtime.")
+    url.set("https://github.com/nemecec/protobuf-javamin")
+    licenses {
+      license {
+        name.set("Apache License, Version 2.0")
+        url.set("https://www.apache.org/licenses/LICENSE-2.0")
+      }
+    }
+    developers {
+      developer {
+        id.set("nemecec")
+        name.set("Neeme Praks")
+      }
+    }
+    scm {
+      url.set("https://github.com/nemecec/protobuf-javamin")
+      connection.set("scm:git:git://github.com/nemecec/protobuf-javamin.git")
+      developerConnection.set("scm:git:ssh://git@github.com/nemecec/protobuf-javamin.git")
+    }
+  }
+}
+
+// Gradle 9 requires the implicit metadata→javadoc dependency to be declared.
+afterEvaluate {
+  tasks.named("generateMetadataFileForMavenPublication") {
+    dependsOn(tasks.named("plainJavadocJar"))
+  }
 }

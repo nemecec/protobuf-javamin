@@ -20,28 +20,31 @@
 // using protoc. The Gradle protobuf plugin handles the orchestration.
 // Wire-format compatibility against Google's protobuf-java is pinned in
 // :runtime's CodedOutputStreamCompatTest / CodedInputStreamCompatTest.
+//
+// This module is not published — it exists purely to validate the codegen
+// against a real .proto end-to-end on every build.
 
 import com.google.protobuf.gradle.id
 
 plugins {
-  id("com.google.protobuf") version "0.9.6"
+  alias(libs.plugins.protobuf)
 }
 
 dependencies {
   implementation(project(":runtime"))
 
-  testImplementation(platform("org.junit:junit-bom:5.10.2"))
-  testImplementation("org.junit.jupiter:junit-jupiter")
-  testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-  testImplementation("org.assertj:assertj-core:3.25.3")
+  testImplementation(platform(libs.junit.bom))
+  testImplementation(libs.junit.jupiter)
+  testRuntimeOnly(libs.junit.platform.launcher)
+  testImplementation(libs.assertj.core)
 
   // Reference encoder for byte-for-byte wire compatibility checks.
-  testImplementation("com.google.protobuf:protobuf-java:4.34.1")
+  testImplementation(libs.protobuf.java)
 }
 
 protobuf {
   protoc {
-    artifact = "com.google.protobuf:protoc:4.34.1"
+    artifact = libs.protoc.get().toString()
   }
   plugins {
     id("javamin") {
@@ -53,8 +56,8 @@ protobuf {
   }
   generateProtoTasks {
     all().configureEach {
-      // Our plugin replaces (not augments) the built-in java codegen.
-      builtins.named("java") { /* no-op so the configure-named lookup succeeds */ }
+      // Drop the built-in Java codegen and replace with our javamin plugin.
+      builtins.named("java") { /* configure-named registration */ }
       builtins.remove(builtins.named("java").get())
       plugins {
         id("javamin")
