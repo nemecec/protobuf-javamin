@@ -22,9 +22,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       # `build` runs `assemble` + `check` (which includes `test`) across all
-      # subprojects, and `:integration-tests:generateTestProto` depends on
-      # `:codegen:installDist`, so the codegen plugin is exercised end-to-end
-      # against the sample .proto on every CI run.
+      # subprojects. `:integration-tests:generateTestProto` depends on
+      # `:codegen:publishToMavenLocal`, so the codegen uber-jar is published
+      # locally and then resolved back via Maven coordinates exactly the way
+      # downstream consumers will use it.
       - name: Build and test
         run: ./gradlew build
 

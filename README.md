@@ -45,16 +45,25 @@ metaspace curve and a slow climb that eventually OOMs.
 - `:codegen` — `protoc` plugin. Reads `CodeGeneratorRequest` from stdin and
   emits Java source files. Build-time only — does not ship to the device.
 - `:integration-tests` — drives a sample `.proto` file through the codegen,
-  compiles the generated Java against `:runtime`, and roundtrips messages.
+  compiles the generated Java against `:runtime`, and roundtrips messages
+  both with itself and against `protobuf-java`'s reference implementation
+  (cross-encoder bytes-out → bytes-in equality, both directions).
 
 ## Wire compatibility
 
-Byte-for-byte compatible with proto2 wire format. The `runtime` module's
-`CodedOutputStreamCompatTest` and `CodedInputStreamCompatTest` pin this against
-`com.google.protobuf:4.34.1` for every wire type plus boundary cases (varint
-sign-extension, ZigZag, UTF-8 surrogate pairs, streaming-refill). If those
-tests pass, anything you encode with this runtime parses on a peer using stock
-protobuf-java, and vice versa.
+Byte-for-byte compatible with proto2 wire format, pinned at two levels:
+
+- **Field-level** — `runtime/CodedOutputStreamCompatTest` and
+  `runtime/CodedInputStreamCompatTest` exchange single values (every wire type,
+  varint sign-extension, ZigZag, UTF-8 surrogate pairs, streaming-refill) with
+  `com.google.protobuf:4.34.1`.
+- **Message-level** — `integration-tests/CrossEncoderRoundtripTest` builds full
+  `Sample` messages with both codegens, swaps serialized bytes between them,
+  and asserts every field reads back equal in both directions, plus that the
+  two encoders produce byte-for-byte identical output for the same content.
+
+If those tests pass, anything you encode with this runtime parses on a peer
+using stock protobuf-java, and vice versa.
 
 ## Use it
 
@@ -99,7 +108,7 @@ updated.
 Deliberate omissions, in order of likelihood we'd add support:
 
 - Proto3.
-- `oneof`, `map<K, V>`.
+- `map<K, V>`.
 - Packed repeated primitives (`[packed=true]` on the wire). Decoding falls
   through to skip-unknown-field.
 - Extensions.

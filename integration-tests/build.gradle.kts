@@ -16,11 +16,12 @@
 // End-to-end tests:
 //   * Sample.proto in src/test/proto is run through OUR protobuf-javamin codegen
 //     and roundtripped against itself (SampleRoundtripTest).
-//   * The same shape, in src/crossCheck/proto, is also run through Google's
-//     stock protoc Java codegen so the test classpath has both generated trees
-//     side by side. CrossCheckTest exchanges serialized bytes between the two
-//     to prove that what one produces, the other parses back to identical
-//     field values — for every field type, including oneof, nested, repeated.
+//   * The same shape in src/crossCheck/proto is run through Google's stock
+//     protoc Java codegen so the test classpath has both generated trees side
+//     by side. CrossEncoderRoundtripTest exchanges serialized bytes between
+//     the two to prove that what one produces, the other parses back to
+//     identical field values — for every field type, including nested,
+//     repeated, and repeated enums.
 //
 // This module isn't published; it exists purely to validate the codegen and
 // runtime against a real .proto end-to-end on every build.
@@ -102,7 +103,15 @@ protobuf {
 }
 
 repositories {
-  mavenLocal()
+  // The codegen uber-jar is published to mavenLocal by the dependsOn above so
+  // protobuf-gradle-plugin can resolve it via Maven coordinates. Scope the
+  // mavenLocal lookup to our group only — we don't want every other dependency
+  // resolution attempt to detour through ~/.m2.
+  mavenLocal {
+    content {
+      includeGroup("dev.nemecec.protobuf.javamin")
+    }
+  }
 }
 
 // The protobuf plugin adds the .proto src dir to test resources too; bundle

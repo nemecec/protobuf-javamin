@@ -66,7 +66,6 @@ final class MessageWriter {
     sb.append("import dev.nemecec.protobuf.javamin.InvalidProtocolBufferException;\n");
     sb.append("import dev.nemecec.protobuf.javamin.MessageLite;\n");
     sb.append("import dev.nemecec.protobuf.javamin.UninitializedMessageException;\n");
-    sb.append("import dev.nemecec.protobuf.javamin.WireFormat;\n");
     sb.append("\n");
 
     writeMessage(sb, top, "");
