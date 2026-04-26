@@ -22,6 +22,7 @@ import com.google.protobuf.DescriptorProtos.FieldDescriptorProto;
 import com.google.protobuf.DescriptorProtos.FieldDescriptorProto.Label;
 import com.google.protobuf.DescriptorProtos.OneofDescriptorProto;
 import dev.nemecec.protobuf.javamin.codegen.JavaGen.FieldKind;
+import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -832,7 +833,13 @@ final class MessageWriter {
     }
   }
 
+  /** Java literal expression that the field reads back as when unset. With no
+   *  {@code [default=...]} on the schema this is the type-default (0/""/empty);
+   *  with a declared default it's that value formatted as a Java literal. The
+   *  same literal is used for the storage initializer and for what
+   *  {@code clearXxx()} resets to, so the two automatically stay in sync. */
   private String defaultValue(FieldDescriptorProto f) {
+    if (f.hasDefaultValue()) return declaredDefaultLiteral(f);
     switch (FieldKind.from(f.getType())) {
       case SCALAR_INT32: case SCALAR_UINT32: case SCALAR_SINT32:
       case SCALAR_FIXED32: case SCALAR_SFIXED32: case ENUM:
@@ -851,11 +858,170 @@ final class MessageWriter {
   }
 
   private String initializerSuffix(FieldDescriptorProto f) {
+    // Singular message fields stay null-initialised (proto2 doesn't allow
+    // [default=...] on messages anyway). Everything else gets an explicit
+    // initializer so a parsed-but-unset field reads back the right value.
+    if (FieldKind.from(f.getType()) == FieldKind.MESSAGE) return "";
+    return " = " + defaultValue(f);
+  }
+
+  /** Render a declared {@code [default=...]} into a Java literal expression.
+   *  Each branch handles the per-type quirks of how protoc stores the value in
+   *  the descriptor: numeric strings (signed/unsigned, with the special tokens
+   *  nan/inf/-inf for floats), unescaped raw text for strings, C-escaped bytes
+   *  for {@code TYPE_BYTES}, and the unqualified value name for enums. */
+  private String declaredDefaultLiteral(FieldDescriptorProto f) {
+    String v = f.getDefaultValue();
     switch (FieldKind.from(f.getType())) {
-      case SCALAR_STRING: return " = \"\"";
-      case SCALAR_BYTES: return " = ByteString.EMPTY";
-      default: return "";
+      case SCALAR_INT32: case SCALAR_SINT32: case SCALAR_SFIXED32:
+        return v;
+      case SCALAR_UINT32: case SCALAR_FIXED32:
+        // Descriptor stores unsigned decimal; emit the equivalent signed-int
+        // bit pattern so the literal fits the Java {@code int} storage type.
+        return Integer.toString((int) Long.parseLong(v));
+      case SCALAR_INT64: case SCALAR_SINT64: case SCALAR_SFIXED64:
+        return v + "L";
+      case SCALAR_UINT64: case SCALAR_FIXED64:
+        return Long.toString(Long.parseUnsignedLong(v)) + "L";
+      case SCALAR_FLOAT:
+        if ("nan".equals(v)) return "Float.NaN";
+        if ("inf".equals(v)) return "Float.POSITIVE_INFINITY";
+        if ("-inf".equals(v)) return "Float.NEGATIVE_INFINITY";
+        return v + "F";
+      case SCALAR_DOUBLE:
+        if ("nan".equals(v)) return "Double.NaN";
+        if ("inf".equals(v)) return "Double.POSITIVE_INFINITY";
+        if ("-inf".equals(v)) return "Double.NEGATIVE_INFINITY";
+        return v + "D";
+      case SCALAR_BOOL:
+        return v;
+      case SCALAR_STRING:
+        // Descriptor stores the raw string contents (proto-side escapes already
+        // resolved). Re-escape for Java source.
+        return "\"" + javaStringEscape(v) + "\"";
+      case SCALAR_BYTES: {
+        // Descriptor stores C-escaped form (per descriptor.proto: "All bytes
+        // >= 128 are escaped"). Decode at codegen time, emit a byte[] literal.
+        byte[] bytes = cEscapeUnescape(v);
+        if (bytes.length == 0) return "ByteString.EMPTY";
+        StringBuilder sb = new StringBuilder("ByteString.copyFrom(new byte[]{");
+        for (int i = 0; i < bytes.length; i++) {
+          if (i > 0) sb.append(", ");
+          sb.append(String.format(Locale.ROOT, "(byte) 0x%02x", bytes[i] & 0xFF));
+        }
+        sb.append("})");
+        return sb.toString();
+      }
+      case ENUM:
+        // Storage is int. Reference the {@code <Enum>.<NAME>_VALUE} constant
+        // emitted by EnumWriter / writeNestedEnum so the initializer is a
+        // compile-time constant, not a method call.
+        return registry.javaName(f.getTypeName()) + "." + v + "_VALUE";
+      case MESSAGE:
+        throw new IllegalStateException("[default=...] is not allowed on message fields");
+      default:
+        throw new IllegalStateException();
     }
+  }
+
+  /** Java port of just enough of the proto C-escape format to handle the bytes
+   *  default values protoc emits in descriptors. Recognises the standard C
+   *  escapes ({@code \\n}, {@code \\t}, …), {@code \\xHH} hex (1–2 digits), and
+   *  {@code \\NNN} octal (1–3 digits). Anything else is an unknown escape.
+   *  Package-private so a focused unit test can pin the parser without going
+   *  through codegen-output inspection. */
+  static byte[] cEscapeUnescape(String input) {
+    ByteArrayOutputStream out = new ByteArrayOutputStream(input.length());
+    int i = 0;
+    while (i < input.length()) {
+      char c = input.charAt(i++);
+      if (c != '\\') {
+        // Descriptor strings hold one byte per char (chars 0–255), so the cast
+        // round-trips. Multibyte UTF-8 doesn't appear here because protoc
+        // pre-escapes anything >= 128.
+        out.write((byte) c);
+        continue;
+      }
+      if (i >= input.length()) {
+        throw new IllegalStateException("Trailing backslash in default value: " + input);
+      }
+      char esc = input.charAt(i++);
+      switch (esc) {
+        case 'a': out.write(0x07); break;
+        case 'b': out.write(0x08); break;
+        case 'f': out.write(0x0C); break;
+        case 'n': out.write(0x0A); break;
+        case 'r': out.write(0x0D); break;
+        case 't': out.write(0x09); break;
+        case 'v': out.write(0x0B); break;
+        case '\\': out.write(0x5C); break;
+        case '\'': out.write(0x27); break;
+        case '"': out.write(0x22); break;
+        case '?': out.write(0x3F); break;
+        case 'x': case 'X': {
+          int v = 0, count = 0;
+          while (i < input.length() && count < 2 && isHex(input.charAt(i))) {
+            v = v * 16 + hexValue(input.charAt(i++));
+            count++;
+          }
+          if (count == 0) {
+            throw new IllegalStateException("\\x without hex digits in: " + input);
+          }
+          out.write(v);
+          break;
+        }
+        case '0': case '1': case '2': case '3':
+        case '4': case '5': case '6': case '7': {
+          int v = esc - '0';
+          for (int k = 0; k < 2 && i < input.length() && isOctal(input.charAt(i)); k++) {
+            v = v * 8 + (input.charAt(i++) - '0');
+          }
+          out.write(v);
+          break;
+        }
+        default:
+          throw new IllegalStateException("Unknown C-escape \\" + esc + " in: " + input);
+      }
+    }
+    return out.toByteArray();
+  }
+
+  private static boolean isHex(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+  }
+
+  private static int hexValue(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return c - 'A' + 10;
+  }
+
+  private static boolean isOctal(char c) {
+    return c >= '0' && c <= '7';
+  }
+
+  /** Re-escape a raw string for emission as a Java string literal. */
+  static String javaStringEscape(String s) {
+    StringBuilder out = new StringBuilder(s.length() + 2);
+    for (int i = 0; i < s.length(); i++) {
+      char c = s.charAt(i);
+      switch (c) {
+        case '\\': out.append("\\\\"); break;
+        case '"': out.append("\\\""); break;
+        case '\n': out.append("\\n"); break;
+        case '\r': out.append("\\r"); break;
+        case '\t': out.append("\\t"); break;
+        case '\b': out.append("\\b"); break;
+        case '\f': out.append("\\f"); break;
+        default:
+          if (c < 0x20 || c == 0x7F) {
+            out.append(String.format(Locale.ROOT, "\\u%04x", (int) c));
+          } else {
+            out.append(c);
+          }
+      }
+    }
+    return out.toString();
   }
 
   private int wireType(FieldDescriptorProto f) {

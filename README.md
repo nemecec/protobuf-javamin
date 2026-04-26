@@ -151,8 +151,6 @@ Deliberate omissions, in order of likelihood we'd add support:
 - Proto3.
 - `map<K, V>`.
 - Extensions.
-- `[default=...]` field defaults. Unset fields read back as the type default
-  (0/""/empty).
 - Reflection / `Descriptors` (defeats the point of being lean).
 - Text format / JSON serialisation.
 

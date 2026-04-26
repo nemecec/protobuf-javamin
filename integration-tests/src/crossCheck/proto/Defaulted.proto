@@ -1,0 +1,41 @@
+// Identical shape to ../../test/proto/Defaulted.proto. Different java_package
+// so the two generated trees can coexist on the test classpath: this one is
+// processed by stock protoc, the other by our protobuf-javamin codegen. The
+// cross-encoder symmetry test exchanges bytes between them.
+
+syntax = "proto2";
+
+package dev.nemecec.protobuf.javamin.integration.crosscheck;
+
+option java_package = "dev.nemecec.protobuf.javamin.integration.crosscheck.gen";
+option java_multiple_files = true;
+
+message Defaulted {
+  optional int32 i32 = 1 [default = -7];
+  optional int64 i64 = 2 [default = 9000000000];
+  optional uint32 u32 = 3 [default = 4294967295];
+  optional uint64 u64 = 4 [default = 18446744073709551615];
+  optional sint32 si32 = 5 [default = -42];
+  optional sint64 si64 = 6 [default = -42];
+  optional fixed32 f32 = 7 [default = 305419896];
+  optional fixed64 f64 = 8 [default = 81985529216486895];
+  optional sfixed32 sf32 = 9 [default = -1];
+  optional sfixed64 sf64 = 10 [default = -1];
+  optional float fp = 11 [default = 3.14];
+  optional double dp = 12 [default = 2.71828];
+  optional bool b = 13 [default = true];
+  optional string s = 14 [default = "hello\nworld \"quoted\""];
+  optional bytes by = 15 [default = "\xab\xcd\012"];
+  optional Hue e = 16 [default = BLUE];
+
+  optional float fp_nan = 17 [default = nan];
+  optional float fp_inf = 18 [default = inf];
+  optional float fp_minf = 19 [default = -inf];
+  optional double dp_nan = 20 [default = nan];
+
+  enum Hue {
+    RED = 0;
+    GREEN = 1;
+    BLUE = 2;
+  }
+}

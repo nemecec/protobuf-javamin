@@ -1,0 +1,50 @@
+syntax = "proto2";
+
+package dev.nemecec.protobuf.javamin.integration;
+
+option java_package = "dev.nemecec.protobuf.javamin.integration.gen";
+option java_multiple_files = true;
+
+// Exercises proto2 [default = ...] across every applicable type. The mirror
+// file at ../../crossCheck/proto/Defaulted.proto carries identical content
+// through stock protoc; the integration tests verify byte-for-byte symmetry
+// between the two encoders.
+message Defaulted {
+  optional int32 i32 = 1 [default = -7];
+  optional int64 i64 = 2 [default = 9000000000];            // > 2^31 to force long handling
+  optional uint32 u32 = 3 [default = 4294967295];           // 2^32 - 1
+  optional uint64 u64 = 4 [default = 18446744073709551615]; // 2^64 - 1
+  optional sint32 si32 = 5 [default = -42];
+  optional sint64 si64 = 6 [default = -42];
+  optional fixed32 f32 = 7 [default = 305419896];           // 0x12345678
+  optional fixed64 f64 = 8 [default = 81985529216486895];   // 0x123456789ABCDEF
+  optional sfixed32 sf32 = 9 [default = -1];
+  optional sfixed64 sf64 = 10 [default = -1];
+  optional float fp = 11 [default = 3.14];
+  optional double dp = 12 [default = 2.71828];
+  optional bool b = 13 [default = true];
+
+  // String with embedded newline and quote — exercise Java-side re-escape.
+  optional string s = 14 [default = "hello\nworld \"quoted\""];
+
+  // Bytes with high-byte values — protoc stores these C-escaped in the
+  // descriptor; the codegen unescapes at build time and emits a byte[] literal.
+  optional bytes by = 15 [default = "\xab\xcd\012"];
+
+  // Nested enum so the type is namespaced to this message — Sample.proto
+  // already declares a top-level Color in the same proto package.
+  optional Hue e = 16 [default = BLUE];
+
+  // Float specials — descriptor encodes these as the literal tokens
+  // "nan" / "inf" / "-inf" rather than numeric strings.
+  optional float fp_nan = 17 [default = nan];
+  optional float fp_inf = 18 [default = inf];
+  optional float fp_minf = 19 [default = -inf];
+  optional double dp_nan = 20 [default = nan];
+
+  enum Hue {
+    RED = 0;
+    GREEN = 1;
+    BLUE = 2;
+  }
+}
