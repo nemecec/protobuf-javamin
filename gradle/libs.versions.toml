@@ -4,7 +4,7 @@ assertj = "3.25.3"
 protobuf = "4.34.1"
 protobuf-gradle = "0.9.6"
 maven-publish = "0.35.0"
-shadow = "8.3.6"
+shadow = "9.4.1"
 
 [libraries]
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
