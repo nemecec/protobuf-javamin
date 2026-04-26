@@ -26,8 +26,8 @@ the official Google runtimes:
 
 | Runtime | Jar size | Classes |
 |---|---|---|
-| `com.google.protobuf:protobuf-java:4.34.1` | 1.9 MB | ~660 |
-| `com.google.protobuf:protobuf-javalite:4.34.1` | 1067 KB | 534 |
+| `com.google.protobuf:protobuf-java` | 1.9 MB | ~660 |
+| `com.google.protobuf:protobuf-javalite` | 1067 KB | 534 |
 | **`dev.nemecec.protobuf.javamin:protobuf-javamin-runtime`** | **20 KB** | **11** |
 
 The runtime numbers above are repo-anchored: build it yourself.
@@ -56,7 +56,7 @@ Byte-for-byte compatible with proto2 wire format, pinned at two levels:
 - **Field-level** — `runtime/CodedOutputStreamCompatTest` and
   `runtime/CodedInputStreamCompatTest` exchange single values (every wire type,
   varint sign-extension, ZigZag, UTF-8 surrogate pairs, streaming-refill) with
-  `com.google.protobuf:4.34.1`.
+  `com.google.protobuf:protobuf-java` as the reference encoder.
 - **Message-level** — `integration-tests/CrossEncoderRoundtripTest` builds full
   `Sample` messages with both codegens, swaps serialized bytes between them,
   and asserts every field reads back equal in both directions, plus that the
@@ -79,7 +79,7 @@ dependencies {
 }
 
 protobuf {
-  protoc { artifact = "com.google.protobuf:protoc:4.34.1" }
+  protoc { artifact = "com.google.protobuf:protoc:<version>" }
   plugins {
     id("javamin") {
       // Resolved from Maven Central as an executable uber-jar (`:all`
