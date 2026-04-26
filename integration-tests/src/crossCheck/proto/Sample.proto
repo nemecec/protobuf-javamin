@@ -1,0 +1,41 @@
+// Identical shape to ../test/proto/Sample.proto. Different java_package so
+// the two generated trees can coexist on the same test classpath: this one
+// is processed by stock protoc with the standard Java codegen (com.google.protobuf
+// runtime), the other by our protobuf-javamin codegen (dev.nemecec.protobuf.javamin
+// runtime). The cross-encoder roundtrip test in src/test/java exchanges
+// serialized bytes between the two and asserts every field reads back equal.
+
+syntax = "proto2";
+
+package dev.nemecec.protobuf.javamin.integration.crosscheck;
+
+option java_package = "dev.nemecec.protobuf.javamin.integration.crosscheck.gen";
+option java_multiple_files = true;
+
+message Sample {
+  optional int32 id = 1;
+  required string name = 2;
+  optional int64 createdAtMillis = 3;
+  optional bool active = 4;
+  optional double weight = 5;
+  optional bytes payload = 6;
+
+  optional Color favoriteColor = 7;
+
+  optional Inner inner = 8;
+  repeated Inner items = 9;
+
+  repeated string tags = 10;
+  repeated Color colorPalette = 11;
+
+  message Inner {
+    optional int32 value = 1;
+    optional string label = 2;
+  }
+}
+
+enum Color {
+  RED = 0;
+  GREEN = 1;
+  BLUE = 2;
+}

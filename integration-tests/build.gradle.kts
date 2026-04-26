@@ -13,21 +13,40 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// End-to-end tests: feed a sample .proto file through the codegen, compile the
-// generated Java against :runtime, and roundtrip messages through it.
+// End-to-end tests:
+//   * Sample.proto in src/test/proto is run through OUR protobuf-javamin codegen
+//     and roundtripped against itself (SampleRoundtripTest).
+//   * The same shape, in src/crossCheck/proto, is also run through Google's
+//     stock protoc Java codegen so the test classpath has both generated trees
+//     side by side. CrossCheckTest exchanges serialized bytes between the two
+//     to prove that what one produces, the other parses back to identical
+//     field values — for every field type, including oneof, nested, repeated.
 //
-// We invoke our codegen as an external process (the protoc-plugin protocol)
-// using protoc. The Gradle protobuf plugin handles the orchestration.
-// Wire-format compatibility against Google's protobuf-java is pinned in
-// :runtime's CodedOutputStreamCompatTest / CodedInputStreamCompatTest.
-//
-// This module is not published — it exists purely to validate the codegen
-// against a real .proto end-to-end on every build.
+// This module isn't published; it exists purely to validate the codegen and
+// runtime against a real .proto end-to-end on every build.
 
 import com.google.protobuf.gradle.id
 
 plugins {
   alias(libs.plugins.protobuf)
+}
+
+// SourceSet declared up front so subsequent blocks (dependencies, protobuf,
+// task config) can reference it.
+sourceSets {
+  test {
+    proto {
+      srcDir("src/test/proto")
+    }
+  }
+  // Sibling source set whose .proto sources are compiled by Google's standard
+  // codegen. Test code imports these classes via the testImplementation hook
+  // below to perform cross-encoder roundtrip checks.
+  create("crossCheck") {
+    proto {
+      srcDir("src/crossCheck/proto")
+    }
+  }
 }
 
 dependencies {
@@ -40,6 +59,11 @@ dependencies {
 
   // Reference encoder for byte-for-byte wire compatibility checks.
   testImplementation(libs.protobuf.java)
+
+  // Make Google-generated Sample types available to test code, plus the
+  // protobuf-java runtime they depend on at compile + runtime.
+  testImplementation(sourceSets["crossCheck"].output)
+  "crossCheckImplementation"(libs.protobuf.java)
 }
 
 protobuf {
@@ -56,16 +80,23 @@ protobuf {
     }
   }
   generateProtoTasks {
-    all().configureEach {
-      // Drop the built-in Java codegen and replace with our javamin plugin.
+    // The :test sourceSet's protos go through our javamin codegen only.
+    ofSourceSet("test").configureEach {
       builtins.named("java") { /* configure-named registration */ }
       builtins.remove(builtins.named("java").get())
       plugins {
         id("javamin")
       }
-      // Make sure the codegen artifact has been published locally before
-      // protobuf-gradle-plugin tries to resolve it.
+      // The codegen artifact must be in mavenLocal before protobuf-gradle-plugin
+      // resolves it.
       dependsOn(":codegen:publishToMavenLocal")
+    }
+    // The :crossCheck sourceSet's protos go through stock protoc's Java
+    // codegen, producing classes that depend on com.google.protobuf at runtime.
+    // No javamin plugin here.
+    ofSourceSet("crossCheck").configureEach {
+      // `builtins.java` is registered by default; just leave it on. It produces
+      // full protobuf-java code (not lite), which has the richest test ergonomics.
     }
   }
 }
@@ -74,16 +105,8 @@ repositories {
   mavenLocal()
 }
 
-sourceSets {
-  test {
-    proto {
-      srcDir("src/test/proto")
-    }
-  }
-}
-
-// The protobuf plugin adds the .proto src dir to the test resources too; bundle
-// it once and ignore subsequent duplicates rather than fighting Gradle about it.
+// The protobuf plugin adds the .proto src dir to test resources too; bundle
+// it once and ignore subsequent duplicates rather than fighting Gradle.
 tasks.withType<ProcessResources>().configureEach {
   duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
