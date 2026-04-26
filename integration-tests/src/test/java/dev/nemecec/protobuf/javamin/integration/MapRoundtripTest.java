@@ -185,6 +185,10 @@ class MapRoundtripTest {
     assertThat(s.toByteArray().length).isEqualTo(s.getSerializedSize());
   }
 
+  // JAVAMIN-ONLY-BEGIN — exercises map<K, enum>'s int-value side-door
+  // (putXxxValue / getXxxValueMap / getXxxValueOrDefault / getXxxValueOrThrow)
+  // which javamin emits for proto2 forward-compat with unknown enum values;
+  // stock proto2 javalite doesn't emit these.
   @Test
   @DisplayName("map<K, EnumType> — typed put/get and the int-value side-door")
   void enumValuedMapTypedAndValueApi() {
@@ -221,7 +225,12 @@ class MapRoundtripTest {
     assertThatThrownBy(() -> b.getStringToColorOrThrow("missing"))
         .isInstanceOf(IllegalArgumentException.class);
   }
+  // JAVAMIN-ONLY-END
 
+  // JAVAMIN-ONLY-BEGIN — javamin specifies that unknown enum values stay in the
+  // int-side-door storage and are dropped from the typed view, with
+  // getXxxOrThrow flagging them. Stock proto2 javalite handles unknown enums
+  // differently (routes them to UnknownFieldSet), so this test is javamin-only.
   @Test
   @DisplayName("map<K, EnumType> — unknown wire enum value survives parse via the int side-door")
   void enumValuedMapToleratesUnknownNumberOnTheWire() throws Exception {
@@ -260,7 +269,12 @@ class MapRoundtripTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("unknown enum value");
   }
+  // JAVAMIN-ONLY-END
 
+  // JAVAMIN-ONLY-BEGIN — these tests intentionally use BOTH runtime classes
+  // (javamin Sample on one side, crosscheck Sample on the other). Sed-rewriting
+  // both into the crosscheck package would collapse them to crosscheck-only
+  // self-tests, which is meaningless.
   @Test
   @DisplayName("cross-encoder: javamin → bytes → google preserves every map's content")
   void crossEncoderJavaminToGoogle() throws Exception {
@@ -321,4 +335,5 @@ class MapRoundtripTest {
         .containsEntry("b", Color.GREEN)
         .hasSize(2);
   }
+  // JAVAMIN-ONLY-END
 }

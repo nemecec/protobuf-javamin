@@ -129,9 +129,17 @@ class SampleRoundtripTest {
     Sample roundtrip = Sample.parseFrom(original.toByteArray());
     assertThat(roundtrip.hasFavoriteColor()).isTrue();
     assertThat(roundtrip.getFavoriteColor()).isEqualTo(Color.GREEN);
+    // JAVAMIN-ONLY-BEGIN — getXxxValue is javamin's int side-door for enum
+    // forward-compat; stock proto2 javalite doesn't emit it (proto3 only).
     assertThat(roundtrip.getFavoriteColorValue()).isEqualTo(1);
+    // JAVAMIN-ONLY-END
   }
 
+  // JAVAMIN-ONLY-BEGIN — exercises the int-value side-door for repeated enums
+  // (addXxxValue / getXxxValueList / getXxxValue) which javamin emits for
+  // proto2 forward-compat with unknown enum values; stock proto2 javalite
+  // doesn't emit these. The typed-enum API on repeated enum fields is
+  // covered indirectly by the cross-encoder roundtrip tests.
   @Test
   @DisplayName("repeated enum — typed adders, typed list view, raw int side-door")
   void repeatedEnum() throws Exception {
@@ -153,6 +161,7 @@ class SampleRoundtripTest {
     assertThat(roundtrip.getColorPalette(2)).isEqualTo(Color.GREEN);
     assertThat(roundtrip.getColorPaletteValue(0)).isEqualTo(0);
   }
+  // JAVAMIN-ONLY-END
 
   @Test
   @DisplayName("delimited stream — write multiple, read back in order")
@@ -202,6 +211,9 @@ class SampleRoundtripTest {
         .isEqualTo(Sample.newBuilder().setName("x").build());
   }
 
+  // JAVAMIN-ONLY-BEGIN — javamin's compact `Sample{id=7, name="hello"}` toString
+  // is intentionally different from stock protobuf-java's multi-line TextFormat
+  // output. Skipped in the Google-twin generation; see README Behavioural notes.
   @Test
   @DisplayName("toString lists only set fields, with quoted strings and typed enums")
   void toStringRenderingIncludesOnlySetFields() {
@@ -226,6 +238,7 @@ class SampleRoundtripTest {
     // Wraps in ClassName{ ... }:
     assertThat(rendered).startsWith("Sample{").endsWith("}");
   }
+  // JAVAMIN-ONLY-END
 
   @Test
   @DisplayName("packed repeated primitives — varint, fixed32, fixed64 — encode/decode roundtrip")

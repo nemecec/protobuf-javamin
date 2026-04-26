@@ -74,7 +74,10 @@ class DefaultedRoundtripTest {
     // Enum defaults reference the Hue.BLUE_VALUE constant in the generated
     // code; the public getter returns the typed enum.
     assertThat(d.getE()).isEqualTo(Defaulted.Hue.BLUE);
+    // JAVAMIN-ONLY-BEGIN — getXxxValue is javamin's int side-door for enum
+    // forward-compat; stock proto2 javalite doesn't emit it (proto3 only).
     assertThat(d.getEValue()).isEqualTo(Defaulted.Hue.BLUE_VALUE);
+    // JAVAMIN-ONLY-END
 
     // Float specials — descriptor stores literal "nan" / "inf" / "-inf".
     assertThat(Float.isNaN(d.getFpNan())).isTrue();
@@ -138,6 +141,9 @@ class DefaultedRoundtripTest {
     assertThat(dst.getI32()).isEqualTo(-7);
   }
 
+  // JAVAMIN-ONLY-BEGIN — these tests intentionally instantiate BOTH codegens'
+  // Defaulted classes to compare their wire output. Sed-rewriting both into
+  // the crosscheck package would collapse them to crosscheck-vs-crosscheck.
   @Test
   @DisplayName("cross-encoder: an unset defaulted message produces identical bytes in both codegens")
   void crossEncoderUnset() {
@@ -170,4 +176,5 @@ class DefaultedRoundtripTest {
 
     assertThat(javamin.toByteArray()).isEqualTo(google.toByteArray());
   }
+  // JAVAMIN-ONLY-END
 }

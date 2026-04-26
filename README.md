@@ -70,6 +70,34 @@ Byte-for-byte compatible with proto2 wire format, pinned at two levels:
 If those tests pass, anything you encode with this runtime parses on a peer
 using stock protobuf-java, and vice versa.
 
+## API compatibility
+
+Wire compatibility tells you the bytes match. Source-level compatibility is a
+separate property: a caller who wrote `proto.setX(1).build()` against
+javalite-generated code should be able to swap to javamin-generated code by
+changing one import. To pin that, the build generates a parallel "Google
+twin" of every roundtrip test on disk:
+
+- **`integration-tests/SampleRoundtripGoogleTest`,
+  `MapRoundtripGoogleTest`, `DefaultedRoundtripGoogleTest`** — produced by
+  `:integration-tests:generateGoogleTwinTests`, which sed-rewrites the
+  matching javamin test source: imports for runtime types
+  (`dev.nemecec.protobuf.javamin.*` → `com.google.protobuf.*`) and for
+  generated types (the `gen` package → the stock-protoc `crosscheck.gen`
+  package). Both versions then have to compile and pass.
+
+If a method name, parameter list, or return type drifts away from what stock
+`protoc-java` emits for the same `.proto`, the twin stops compiling and the
+build breaks. If behaviour drifts (different parsed value, different
+exception type), the twin's assertions fail. The same JUnit assertion bodies
+stand in for the cross-runtime comparison — both runtimes must satisfy
+identical literal expectations.
+
+Tests that probe javamin-specific behaviour (compact `toString` format,
+proto2 forward-compat int side-door for enums, the explicit cross-encoder
+methods that use both codegens) are wrapped in `// JAVAMIN-ONLY-BEGIN /
+JAVAMIN-ONLY-END` markers and stripped from the twin.
+
 ## Use it
 
 In your consumer's `build.gradle.kts`:

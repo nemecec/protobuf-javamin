@@ -119,3 +119,78 @@ repositories {
 tasks.withType<ProcessResources>().configureEach {
   duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
+
+// --- Google-twin test generation ---------------------------------------------
+//
+// Take the existing roundtrip tests in src/test/java and generate parallel
+// versions that import the stock-protoc-generated Sample / Defaulted classes
+// (the crossCheck source set) plus stock's runtime types (com.google.protobuf
+// .ByteString, .CodedOutputStream, etc.). Both versions then compile and run
+// against their respective codegens — the Google twin failing to compile
+// surfaces an API surface drift, and a runtime failure surfaces a behavioural
+// drift. Tests that probe javamin-specific behaviour (toString format,
+// unknown-enum handling) or that intentionally use both codegens (cross-
+// encoder methods) are wrapped in `// JAVAMIN-ONLY-BEGIN / END` markers and
+// dropped from the twin.
+
+val googleTwinTestSourceDir = layout.buildDirectory.dir("generated/sources/google-twin-tests/java")
+
+val twinSources = listOf(
+    "SampleRoundtripTest",
+    "MapRoundtripTest",
+    "DefaultedRoundtripTest"
+)
+
+val generateGoogleTwinTests by tasks.registering {
+  group = "verification"
+  description = "Sed-rewrites javamin tests into stock-protoc-generated counterparts."
+
+  val srcDir = file("src/test/java/dev/nemecec/protobuf/javamin/integration")
+  val outDir = googleTwinTestSourceDir
+  inputs.files(twinSources.map { srcDir.resolve("$it.java") })
+  outputs.dir(outDir)
+
+  doLast {
+    val out = outDir.get().asFile.resolve("dev/nemecec/protobuf/javamin/integration")
+    out.mkdirs()
+    for (name in twinSources) {
+      val src = srcDir.resolve("$name.java").readText()
+      val twinName = name.replace("Test", "GoogleTest")
+
+      // Strip JAVAMIN-ONLY-BEGIN ... JAVAMIN-ONLY-END blocks (multi-line).
+      val stripped = src.replace(
+          Regex("""(?ms)^[ \t]*//\s*JAVAMIN-ONLY-BEGIN.*?//\s*JAVAMIN-ONLY-END[ \t]*\n?"""),
+          ""
+      )
+
+      // Rewrite imports + class name. We match only on lines beginning with
+      // `import ` so the file's own `package` declaration and any incidental
+      // textual occurrences (string literals, comments) are left alone. The
+      // runtime-type rule has a `(?!integration)` lookahead so it doesn't
+      // cascade onto the result of the generated-package rule (both sides of
+      // which still live under `dev.nemecec.protobuf.javamin.integration.*`).
+      val rewritten = stripped
+          .replace(
+              Regex("""^import dev\.nemecec\.protobuf\.javamin\.integration\.gen\.""",
+                  RegexOption.MULTILINE),
+              "import dev.nemecec.protobuf.javamin.integration.crosscheck.gen."
+          )
+          .replace(
+              Regex("""^import dev\.nemecec\.protobuf\.javamin\.(?!integration)""",
+                  RegexOption.MULTILINE),
+              "import com.google.protobuf."
+          )
+          .replace("class $name", "class $twinName")
+
+      out.resolve("$twinName.java").writeText(rewritten)
+    }
+  }
+}
+
+sourceSets.test {
+  java.srcDir(googleTwinTestSourceDir)
+}
+
+tasks.named("compileTestJava") {
+  dependsOn(generateGoogleTwinTests)
+}
