@@ -30,14 +30,14 @@ jobs:
         run: ./gradlew build
 
       - name: Upload runtime jar
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: runtime
           path: runtime/build/libs/*.jar
           retention-days: 7
 
       - name: Upload codegen jar
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: codegen
           path: codegen/build/libs/*.jar
@@ -45,7 +45,7 @@ jobs:
 
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports
           path: |
